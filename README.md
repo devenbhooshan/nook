@@ -237,12 +237,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Roadmap
 
-- IMAP/SMTP and Microsoft 365 accounts
-- Attachments (viewing and sending)
-- Rich-text compose, signatures, send later, undo send
-- Snooze and reminders
-- Syncing tags back to Gmail labels (opt-in)
-- Encrypted local store
+1. **Snooze and reminders** (top priority)
+2. Attachments: viewing and sending
+3. Rich-text compose, signatures, send later, undo send
+4. Encrypted local store
 
 ## License
 
