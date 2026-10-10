@@ -29,10 +29,16 @@
 | --- | --- | --- |
 | ![Reader](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) | ![Command palette](docs/screenshots/palette.png) |
 
+## Download
+
+Get the latest **[Nook.dmg from Releases](https://github.com/supergrow-ai/nook/releases/latest)**, open it and drag Nook to Applications. Builds are signed with a Developer ID and notarized by Apple.
+
+You'll still need your own Google Cloud OAuth client to connect Gmail; [Connecting Gmail](#1-connecting-gmail) walks you through it. To build from source instead, see [Getting started](#getting-started).
+
 ## Requirements
 
 - macOS 26 (Tahoe) or later
-- Swift 6.2+ (Xcode 26, or just the Command Line Tools)
+- To build from source: Swift 6.2+ (Xcode 26, or just the Command Line Tools)
 - A Gmail account and a Google Cloud OAuth client (free; see below)
 - For tagging (optional): [Ollama](https://ollama.com) with a model pulled (recommended), or Apple Intelligence turned on
 
