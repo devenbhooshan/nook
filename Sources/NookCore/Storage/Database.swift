@@ -1,11 +1,14 @@
 import Foundation
-import SQLite3
+import SQLCipher
 
 private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
 public struct DatabaseError: Error, LocalizedError, Equatable {
     public let message: String
     public var errorDescription: String? { message }
+
+    /// The store is encrypted and this key doesn't open it.
+    public static let wrongKey = DatabaseError(message: "The mail store couldn't be unlocked with this key.")
 }
 
 /// A result row, keyed by column name.
@@ -48,25 +51,69 @@ public final class Database: @unchecked Sendable {
 
     /// Opens (or creates) a database. Pass `":memory:"` for an in-memory store.
     ///
-    /// - Parameter readOnly: Opens a second, read-only connection to an existing store. With WAL, reads on it
-    ///   never wait for writes on the main connection, which keeps the UI responsive while a sync is writing.
-    public init(path: String, readOnly: Bool = false) throws {
+    /// - Parameters:
+    ///   - key: A 256-bit key. The store is encrypted with SQLCipher (AES-256), so its file is unreadable without it.
+    ///     `nil` opens an unencrypted store (tests, and legacy stores before they're converted).
+    ///   - readOnly: Opens a second, read-only connection to an existing store. With WAL, reads on it
+    ///     never wait for writes on the main connection, which keeps the UI responsive while a sync is writing.
+    public init(path: String, key: Data? = nil, readOnly: Bool = false) throws {
         let flags = (readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             sqlite3_close(handle)
             throw DatabaseError(message: "Could not open database at \(path): \(message)")
         }
-        // Another process (nook-mcp, or the app while nook-mcp runs) may hold a write lock briefly.
-        try run("PRAGMA busy_timeout = 3000")
-        guard !readOnly else { return }
-        try run("PRAGMA journal_mode=WAL")
-        try run("PRAGMA synchronous=NORMAL")
-        try Schema.migrate(self)
+        if let key {
+            try run("PRAGMA key = \"x'\(key.hexString)'\"")
+            // SQLCipher only checks the key on first read.
+            guard (try? query("SELECT count(*) AS n FROM sqlite_master")) != nil else { throw DatabaseError.wrongKey }
+        }
+        do {
+            // Another process (nook-mcp, or the app while nook-mcp runs) may hold a write lock briefly.
+            try run("PRAGMA busy_timeout = 3000")
+            guard !readOnly else { return }
+            try run("PRAGMA journal_mode=WAL")
+            try run("PRAGMA synchronous=NORMAL")
+            try Schema.migrate(self)
+        } catch let error as DatabaseError where error.message == "file is not a database" {
+            // An encrypted store opened without its key looks like garbage to SQLite.
+            throw DatabaseError.wrongKey
+        }
     }
 
     deinit {
         sqlite3_close(handle)
+    }
+
+    // MARK: Encryption at rest
+
+    /// Whether the file at `path` is an unencrypted SQLite database. Encrypted files start with random bytes.
+    public static func isPlaintext(at path: String) -> Bool {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return false }
+        defer { try? handle.close() }
+        return (try? handle.read(upToCount: 16)) == Data("SQLite format 3\0".utf8)
+    }
+
+    /// Converts an unencrypted store to an encrypted one, in place. Writes an encrypted copy, checks it opens,
+    /// then swaps it in, so the original stays untouched if anything fails along the way.
+    public static func encryptInPlace(path: String, key: Data) throws {
+        let fileManager = FileManager.default
+        let staging = path + ".encrypting"
+        try? fileManager.removeItem(atPath: staging)
+        do {
+            let plain = try Database(path: path)
+            try plain.run("PRAGMA wal_checkpoint(TRUNCATE)")
+            let version = try plain.query("PRAGMA user_version").first?.int("user_version") ?? 0
+            let quoted = staging.replacingOccurrences(of: "'", with: "''")
+            try plain.run("ATTACH DATABASE '\(quoted)' AS encrypted KEY \"x'\(key.hexString)'\"")
+            _ = try plain.query("SELECT sqlcipher_export('encrypted')")
+            try plain.run("PRAGMA encrypted.user_version = \(version)")
+            try plain.run("DETACH DATABASE encrypted")
+        }
+        // Make sure the copy opens with the key before replacing anything.
+        do { _ = try Database(path: staging, key: key, readOnly: true) }
+        _ = try fileManager.replaceItemAt(URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: staging))
+        for suffix in ["-wal", "-shm"] { try? fileManager.removeItem(atPath: path + suffix) }
     }
 
     /// Runs one or more statements that take no arguments.
@@ -301,4 +348,8 @@ enum Schema {
             }
         }
     }
+}
+
+extension Data {
+    var hexString: String { map { String(format: "%02x", $0) }.joined() }
 }

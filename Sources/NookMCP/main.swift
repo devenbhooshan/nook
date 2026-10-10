@@ -19,7 +19,9 @@ func databasePath() throws -> String {
 }
 
 do {
-    let repo = MailRepository(db: try Database(path: try databasePath()))
+    // The store is encrypted; its key comes from the Keychain. nook-mcp is signed with Nook's identity,
+    // so the Keychain hands it over without asking.
+    let repo = try MailStore.openForReading(path: try databasePath(), secrets: KeychainStore())
     let server = MCPServer(
         repo: repo,
         isEnabled: { MCPSettings.isEnabled() },

@@ -26,7 +26,9 @@ echo "Releasing Nook $version, signed as: $identity"
 
 app="build/Nook.app"
 # Inside out: the helper first, then the app. Hardened runtime and a secure timestamp are required for notarization.
-codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/MacOS/nook-mcp"
+bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/Info.plist)"
+codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/Frameworks/SQLCipher.framework"
+codesign --force --options runtime --timestamp --identifier "$bundle_id" --sign "$identity" "$app/Contents/MacOS/nook-mcp"
 codesign --force --options runtime --timestamp --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 

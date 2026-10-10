@@ -16,6 +16,7 @@
 ## Why Nook
 
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
+- **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
@@ -195,11 +196,14 @@ Tests/
 
 **How it stays fast.** Every switch and action has a 100 ms budget, enforced by `PerformanceTests` on a 10,000-message mailbox. Lists and counts read a small per-conversation index (`threads`, `thread_tags`) that's updated on every write, instead of scanning messages. Message bodies live in their own table and are read only when you open a conversation. The list loads 100 conversations at a time. The UI reads through a separate read-only SQLite connection, so a running sync never blocks it.
 
+**How encryption works.** On first launch Nook creates a random 256-bit key and keeps it in the Keychain, tied to this Mac. The whole store, including the search index, is encrypted with [SQLCipher](https://www.zetetic.net/sqlcipher/) (AES-256), pinned to a checksum-verified release. Upgrading from an unencrypted store converts it in place on first launch. `nook-mcp` is signed with the app's identity, so it can read the key without a prompt. A store copied to another Mac can't be opened there: Nook sets it aside and downloads your mail again.
+
 **Where data lives.**
 
 | What | Where |
 | --- | --- |
-| Mail, tags, search index | `~/Library/Application Support/Nook/nook.sqlite` |
+| Mail, tags, search index | `~/Library/Application Support/Nook/nook.sqlite`, encrypted with SQLCipher (AES-256), readable only by you |
+| Database encryption key | macOS Keychain, created on first launch, this device only |
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, and your Ollama server if you use one |
@@ -240,7 +244,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 1. **Snooze and reminders** (top priority)
 2. Attachments: viewing and sending
 3. Rich-text compose, signatures, send later, undo send
-4. Encrypted local store
 
 ## License
 

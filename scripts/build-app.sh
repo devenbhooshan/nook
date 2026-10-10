@@ -14,6 +14,13 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Nook" "$app/Contents/MacOS/Nook"
 cp "$bin/nook-mcp" "$app/Contents/MacOS/nook-mcp"
+
+# SQLCipher (the mail store's encryption) is a framework: embed it and point both executables at it.
+mkdir -p "$app/Contents/Frameworks"
+cp -R "$bin/SQLCipher.framework" "$app/Contents/Frameworks/"
+for executable in Nook nook-mcp; do
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/$executable" 2>/dev/null || true
+done
 cp Resources/Info.plist "$app/Contents/Info.plist"
 
 # Generate the icon once; it's cached in build/.
@@ -58,7 +65,13 @@ else
 fi
 [[ -z "$identity" ]] && identity="-"
 
-codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app/Contents/MacOS/nook-mcp" >/dev/null
+# nook-mcp shares the app's identifier, so with a stable signature the Keychain treats it as Nook and lets it
+# read the mail store's encryption key without asking.
+bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/Info.plist)"
+# Inside out: the embedded framework first, then the helper, then the app. With the hardened runtime, macOS only
+# loads libraries signed by the same team, so the framework is re-signed with our identity.
+codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app/Contents/Frameworks/SQLCipher.framework" >/dev/null
+codesign --force ${signing[@]+"${signing[@]}"} --identifier "$bundle_id" --sign "$identity" "$app/Contents/MacOS/nook-mcp" >/dev/null
 codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app" >/dev/null
 
 if [[ "$identity" == "-" ]]; then

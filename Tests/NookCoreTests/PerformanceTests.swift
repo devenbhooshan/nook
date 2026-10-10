@@ -16,8 +16,8 @@ struct PerformanceTests {
     /// Built once for the suite: a store with two accounts, tags, and a realistic mix of read/unread/archived mail.
     static let fixture: (repo: MailRepository, url: URL) = {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("nook-perf-\(UUID().uuidString).sqlite")
-        let writer = try! Database(path: url.path)
-        let repo = MailRepository(db: writer, reader: try! Database(path: url.path, readOnly: true))
+        // Encrypted, like the app's store, so the budgets include SQLCipher's cost.
+        let repo = try! MailStore.open(path: url.path, secrets: MemorySecretStore()).repository
         try! repo.addAccount(email: "me@example.com", name: "Me")
         try! repo.addAccount(email: "work@example.com", name: "Work")
 
@@ -103,12 +103,13 @@ struct PerformanceTests {
             let snapshots = try repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [], remove: [SystemLabel.inbox])
             try repo.restore(snapshots)
         }
-        #expect(archive < Self.budget, "archive + undo took \(archive)")
+        // Two actions (archive, then undo), so twice the single-action budget.
+        #expect(archive < Self.budget * 2, "archive + undo took \(archive)")
         let tag = try measure {
             try repo.toggleTag("Finance", account: thread.account, threadId: thread.threadId)
             try repo.toggleTag("Finance", account: thread.account, threadId: thread.threadId)
         }
-        #expect(tag < Self.budget, "tag toggle took \(tag)")
+        #expect(tag < Self.budget * 2, "tagging and untagging took \(tag)")
     }
 
     @Test func aSyncBatchHoldsTheWriteLockBriefly() throws {

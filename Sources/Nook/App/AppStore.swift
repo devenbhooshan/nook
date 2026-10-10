@@ -107,6 +107,8 @@ final class AppStore: ObservableObject {
     private let sync: SyncEngine
     private let tagger: Tagger
     private let isDemo: Bool
+    /// The previous mail store couldn't be unlocked and was set aside; mail downloads again.
+    var startedWithFreshStore = false
     private var demoOnboardingCompleted: Bool? = true
     private var demoTaggingReviewed = true
     private var undoAction: (() -> Void)?
@@ -153,11 +155,13 @@ final class AppStore: ObservableObject {
         if CommandLine.arguments.contains("--demo") { return DemoData.store() }
         LegacySettings.migrateIfNeeded()
         do {
-            let path = try Database.defaultURL().path
-            let db = try Database(path: path)
-            // A second, read-only connection for the UI, so lists never wait behind a sync's writes.
-            let reader = try Database(path: path, readOnly: true)
-            return AppStore(repo: MailRepository(db: db, reader: reader), secrets: KeychainStore())
+            // Encrypted at rest with a key from the Keychain. The first launch after updating converts the old,
+            // unencrypted store in place. The UI gets its own read-only connection, so it never waits on a sync.
+            let secrets = KeychainStore()
+            let opened = try MailStore.open(path: try Database.defaultURL().path, secrets: secrets)
+            let store = AppStore(repo: opened.repository, secrets: secrets)
+            store.startedWithFreshStore = opened.startedFresh
+            return store
         } catch {
             fatalError("Nook couldn't open its mail store: \(error.localizedDescription)")
         }
@@ -199,6 +203,9 @@ final class AppStore: ObservableObject {
 
         keyRouter.install()
         DemoData.applyLaunchOptions(to: self)
+        if startedWithFreshStore {
+            showToast("Nook couldn't unlock its saved mail, so it's downloading it again.", isError: true)
+        }
         syncLoop = Task { [weak self] in
             while !Task.isCancelled {
                 self?.syncNow()

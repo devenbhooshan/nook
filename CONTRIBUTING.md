@@ -7,7 +7,7 @@ Thanks for helping. Nook is small on purpose, so a few principles guide what goe
 1. **Your mail stays yours.** No feature may send mail content, metadata or usage data anywhere except the user's own mail provider and the user's own model server. No analytics, no crash reporters that phone home, and no third-party SDKs.
 2. **Local first.** Reads come from the local store. Writes apply locally first, then sync. The UI should never wait on the network.
 3. **Keyboard first, calm by default.** Every common action has a single-key shortcut. Visual changes should make the interface quieter, not busier.
-4. **No dependencies** unless there's no reasonable alternative. Today Nook uses only Apple frameworks and SQLite.
+4. **No dependencies** unless there's no reasonable alternative. Today Nook uses Apple frameworks plus SQLCipher (database encryption, pinned to an exact, checksum-verified release).
 
 ## Getting set up
 
