@@ -1,0 +1,239 @@
+import Foundation
+
+public struct SyncReport: Sendable, Equatable {
+    public enum Kind: Sendable { case full, incremental }
+    public var kind: Kind
+    public var added = 0
+    public var updated = 0
+    public var deleted = 0
+
+    public init(kind: Kind, added: Int = 0, updated: Int = 0, deleted: Int = 0) {
+        self.kind = kind
+        self.added = added
+        self.updated = updated
+        self.deleted = deleted
+    }
+}
+
+/// Keeps the local store in step with Gmail.
+///
+/// - The first sync downloads the inbox plus recent mail (`initialQuery`), then saves Gmail's history cursor.
+/// - Later syncs replay only the history since that cursor, which is cheap enough to run every few seconds.
+/// - If the cursor has expired (Gmail returns 404), it falls back to a full sync that also refreshes labels.
+///
+/// Concurrent requests for the same account join the sync already running instead of starting a new one.
+public actor SyncEngine {
+    public typealias ServiceFactory = @Sendable (String) throws -> GmailService
+
+    /// Drafts are excluded because Nook never stores them; listing them would re-download them on every resync.
+    public var initialQuery = "(in:inbox OR newer_than:60d) -in:drafts"
+    public var initialLimit = 2000
+    public var maxConcurrentFetches = 8
+    /// Messages are saved, and observers notified, after each batch so the list fills in as it downloads.
+    /// Small batches keep each write transaction short, so a user action never waits long behind one.
+    public var batchSize = 20
+
+    private let repo: MailRepository
+    private let makeService: ServiceFactory
+    private let onChange: @Sendable () -> Void
+    private var services: [String: GmailService] = [:]
+    private var running: [String: Task<SyncReport, Error>] = [:]
+
+    public init(repo: MailRepository, makeService: @escaping ServiceFactory, onChange: @escaping @Sendable () -> Void = {}) {
+        self.repo = repo
+        self.makeService = makeService
+        self.onChange = onChange
+    }
+
+    public func configure(initialQuery: String? = nil, initialLimit: Int? = nil, batchSize: Int? = nil) {
+        if let initialQuery { self.initialQuery = initialQuery }
+        if let initialLimit { self.initialLimit = initialLimit }
+        if let batchSize { self.batchSize = batchSize }
+    }
+
+    public func service(for email: String) throws -> GmailService {
+        if let service = services[email] { return service }
+        let service = try makeService(email)
+        services[email] = service
+        return service
+    }
+
+    /// Drops the cached client, for example after the account is removed.
+    public func forget(_ email: String) {
+        services[email] = nil
+        running[email]?.cancel()
+        running[email] = nil
+    }
+
+    @discardableResult
+    public func sync(_ email: String) async throws -> SyncReport {
+        if let task = running[email] { return try await task.value }
+        let task = Task { try await self.performSync(email) }
+        running[email] = task
+        defer { running[email] = nil }
+        return try await task.value
+    }
+
+    private func performSync(_ email: String) async throws -> SyncReport {
+        let service = try service(for: email)
+        if let cursor = repo.account(email)?.historyId, !cursor.isEmpty {
+            do {
+                return try await incrementalSync(email, service: service, cursor: cursor)
+            } catch GmailError.notFound {
+                // History older than about a week expires. Start over.
+            }
+        }
+        return try await fullSync(email, service: service)
+    }
+
+    // MARK: Full
+
+    private func fullSync(_ email: String, service: GmailService) async throws -> SyncReport {
+        // Read the cursor first, so changes made while downloading are replayed next time.
+        let profile = try await service.profile()
+        let ids = try await service.listMessageIDs(query: initialQuery, limit: initialLimit)
+        let known = repo.messageIds(account: email)
+
+        var report = SyncReport(kind: .full)
+        report.added = try await fetchAndStore(ids.filter { !known.contains($0) }, account: email, service: service)
+
+        // On a resync, refresh labels on messages we already had. Their bodies don't change.
+        let existing = ids.filter(known.contains)
+        if !existing.isEmpty {
+            report.updated = try await refreshLabels(existing, account: email, service: service)
+        }
+
+        try repo.setHistoryId(profile.historyId, for: email)
+        onChange()
+        return report
+    }
+
+    // MARK: Incremental
+
+    private func incrementalSync(_ email: String, service: GmailService, cursor: String) async throws -> SyncReport {
+        let history = try await service.history(since: cursor)
+        var report = SyncReport(kind: .incremental)
+        guard !history.records.isEmpty else {
+            if history.historyId != cursor { try repo.setHistoryId(history.historyId, for: email) }
+            return report
+        }
+
+        // Fold the records into a final state per message. Later records win.
+        var added = Set<String>()
+        var deleted = Set<String>()
+        var labels: [String: [String]] = [:]
+        var labelsUnknown = Set<String>()
+        for record in history.records {
+            for change in record.messagesAdded ?? [] {
+                added.insert(change.message.id)
+                deleted.remove(change.message.id)
+            }
+            for change in record.messagesDeleted ?? [] {
+                deleted.insert(change.message.id)
+                added.remove(change.message.id)
+                labels[change.message.id] = nil
+            }
+            for change in (record.labelsAdded ?? []) + (record.labelsRemoved ?? []) {
+                if let ids = change.message.labelIds {
+                    labels[change.message.id] = ids
+                    labelsUnknown.remove(change.message.id)
+                } else {
+                    labelsUnknown.insert(change.message.id)
+                }
+            }
+        }
+
+        let known = repo.messageIds(account: email)
+        var toFetch = added
+        // A label change on a message we never downloaded (say, an old one moved back to the inbox) needs the full message.
+        toFetch.formUnion(labels.keys.filter { !known.contains($0) })
+        toFetch.formUnion(labelsUnknown.filter { !known.contains($0) })
+        toFetch.subtract(deleted)
+
+        for (id, ids) in labels where known.contains(id) && !toFetch.contains(id) && !deleted.contains(id) {
+            if Self.shouldStore(labels: ids) {
+                try repo.setLabels(Set(ids), account: email, messageId: id)
+            } else {
+                deleted.insert(id)
+            }
+            report.updated += 1
+        }
+        let refetchLabels = labelsUnknown.filter { known.contains($0) && !deleted.contains($0) }
+        report.updated += try await refreshLabels(Array(refetchLabels), account: email, service: service)
+
+        report.added = try await fetchAndStore(Array(toFetch), account: email, service: service)
+
+        let removals = deleted.filter(known.contains)
+        try repo.deleteMessages(account: email, ids: Array(removals))
+        report.deleted = removals.count
+
+        try repo.setHistoryId(history.historyId, for: email)
+        onChange()
+        return report
+    }
+
+    // MARK: Fetching
+
+    /// Spam and drafts are never stored.
+    static func shouldStore(labels: [String]) -> Bool {
+        !labels.contains(SystemLabel.spam) && !labels.contains(SystemLabel.draft)
+    }
+
+    private func fetchAndStore(_ ids: [String], account: String, service: GmailService) async throws -> Int {
+        var stored = 0
+        for start in stride(from: 0, to: ids.count, by: max(1, batchSize)) {
+            try Task.checkCancellation()
+            let batch = Array(ids[start..<min(start + batchSize, ids.count)])
+            let fetched = try await fetch(batch, format: .full, service: service)
+            let messages = fetched
+                .filter { Self.shouldStore(labels: $0.labelIds ?? []) }
+                .map { MIMEParser.message(from: $0, account: account) }
+            try repo.upsert(messages)
+            stored += messages.count
+            onChange()
+        }
+        return stored
+    }
+
+    private func refreshLabels(_ ids: [String], account: String, service: GmailService) async throws -> Int {
+        guard !ids.isEmpty else { return 0 }
+        var updated = 0
+        for message in try await fetch(ids, format: .minimal, service: service) {
+            let labels = message.labelIds ?? []
+            if Self.shouldStore(labels: labels) {
+                try repo.setLabels(Set(labels), account: account, messageId: message.id)
+            } else {
+                try repo.deleteMessages(account: account, ids: [message.id])
+            }
+            updated += 1
+        }
+        return updated
+    }
+
+    /// Fetches messages with bounded concurrency. Messages deleted in the meantime (404) are skipped.
+    private func fetch(_ ids: [String], format: GmailMessageFormat, service: GmailService) async throws -> [GmailMessage] {
+        let limit = max(1, maxConcurrentFetches)
+        return try await withThrowingTaskGroup(of: GmailMessage?.self) { group in
+            var iterator = ids.makeIterator()
+            func addNext() -> Bool {
+                guard let id = iterator.next() else { return false }
+                group.addTask {
+                    do {
+                        return try await service.message(id: id, format: format)
+                    } catch GmailError.notFound {
+                        return nil
+                    }
+                }
+                return true
+            }
+
+            for _ in 0..<limit where !addNext() { break }
+            var results: [GmailMessage] = []
+            while let result = try await group.next() {
+                if let result { results.append(result) }
+                _ = addNext()
+            }
+            return results
+        }
+    }
+}
