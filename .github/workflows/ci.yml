@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run it replaces.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     # FoundationModels needs the macOS 26 SDK.

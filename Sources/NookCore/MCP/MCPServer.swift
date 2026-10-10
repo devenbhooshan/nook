@@ -341,12 +341,15 @@ public enum MCPSettings {
     public static let enabledKey = "mcp.enabled"
     public static let appDefaultsDomain = "com.devenbhooshan.nook"
 
-    /// `NOOK_MCP_ENABLED=1` overrides the app setting, for development.
+    /// In debug builds, `NOOK_MCP_ENABLED=1` overrides the app setting, for development. Release builds ignore it:
+    /// otherwise anything that launches nook-mcp could set it and read mail with access turned off.
     public static func isEnabled(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundleIdentifier: String? = Bundle.main.bundleIdentifier
     ) -> Bool {
+        #if DEBUG
         if let override = environment["NOOK_MCP_ENABLED"] { return override == "1" || override.lowercased() == "true" }
+        #endif
         return appDefaults(bundleIdentifier: bundleIdentifier)?.bool(forKey: enabledKey) ?? false
     }
 

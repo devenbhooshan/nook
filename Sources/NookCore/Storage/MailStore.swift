@@ -15,7 +15,12 @@ public enum MailStore {
 
     /// The store's key, created on first use: 32 random bytes, kept only on this Mac.
     public static func key(in secrets: SecretStore) throws -> Data {
-        if let existing = secrets.data(for: keyName), existing.count == 32 { return existing }
+        // A read error must not look like "no key yet": creating a new key would overwrite the real one and
+        // make the store unreadable for good. Only a genuine "not found" creates one.
+        if let existing = try secrets.lookup(keyName) {
+            guard existing.count == 32 else { throw DatabaseError(message: "Nook's encryption key in the Keychain is damaged.") }
+            return existing
+        }
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             throw DatabaseError(message: "Couldn't generate an encryption key.")
@@ -49,7 +54,7 @@ public enum MailStore {
         if Database.isPlaintext(at: path) {
             return MailRepository(db: try Database(path: path))
         }
-        guard let key = secrets.data(for: keyName) else {
+        guard let key = try secrets.lookup(keyName) else {
             throw DatabaseError(message: "Nook's mail store is encrypted and its key isn't available. Open Nook once, then try again.")
         }
         return try connect(path: path, key: key)

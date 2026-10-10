@@ -14,6 +14,7 @@ Thanks for helping. Nook is small on purpose, so a few principles guide what goe
 ```bash
 ./scripts/test.sh            # all tests must pass
 swift run Nook --demo        # run the app on sample data, no Google account needed
+./scripts/setup-signing.sh   # once, before connecting real accounts, so rebuilds keep the same identity
 ```
 
 ## Where code goes
@@ -45,4 +46,4 @@ We use [Swift Testing](https://developer.apple.com/documentation/testing). Pleas
 
 ## Reporting security issues
 
-Please don't open a public issue for security problems, such as ways to leak data from a rendered email or bypass remote-content blocking. Contact the maintainers privately and we'll respond quickly.
+Please don't open a public issue for security problems, such as ways to leak data from a rendered email or bypass remote-content blocking. See [SECURITY.md](SECURITY.md) for how to report them privately.

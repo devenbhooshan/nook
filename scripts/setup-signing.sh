@@ -5,15 +5,17 @@
 # you to approve Keychain access again after every build. With a stable certificate, it asks at most once.
 #
 # The certificate lives in its own small keychain under ~/Library/Application Support/Nook/Signing, not in
-# your login keychain. macOS asks for your Mac password once, to trust it for code signing.
-# For public releases, sign with an Apple Developer ID instead.
+# your login keychain. That keychain gets a random password, generated here and kept in your login keychain,
+# so it's unique to this Mac. macOS asks for your Mac password once, to trust the certificate for code signing.
+#
+# Local builds can't use the hardened runtime (it requires a Team ID, which only an Apple Developer ID has).
+# For builds you share, sign with a Developer ID instead.
 set -euo pipefail
 
 name="Nook Local Signing"
 dir="$HOME/Library/Application Support/Nook/Signing"
 keychain="$dir/signing.keychain-db"
-# This only protects the throwaway keychain that holds the signing key, nothing else.
-password="nook-local-signing"
+password_service="Nook Local Signing Keychain"
 
 if [[ -f "$keychain" ]] && security find-identity -v -p codesigning "$keychain" | grep -q "$name"; then
     echo "Already set up: builds are signed with \"$name\"."
@@ -21,6 +23,9 @@ if [[ -f "$keychain" ]] && security find-identity -v -p codesigning "$keychain" 
 fi
 
 mkdir -p "$dir"
+chmod 700 "$dir"
+password="$(openssl rand -hex 32)"
+security add-generic-password -U -s "$password_service" -a "$USER" -w "$password" -T /usr/bin/security >/dev/null
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

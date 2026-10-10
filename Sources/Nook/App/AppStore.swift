@@ -107,6 +107,7 @@ final class AppStore: ObservableObject {
     private let sync: SyncEngine
     private let tagger: Tagger
     private let isDemo: Bool
+    private var sendingDrafts: Set<UUID> = []
     /// The previous mail store couldn't be unlocked and was set aside; mail downloads again.
     var startedWithFreshStore = false
     private var demoOnboardingCompleted: Bool? = true
@@ -533,17 +534,20 @@ final class AppStore: ObservableObject {
     }
 
     func removeAccount(_ email: String) {
-        do {
-            try repo.removeAccount(email)
-            secrets.removeTokens(for: email)
-            let sync = sync
-            Task { await sync.forget(email) }
+        // Stop the account's sync before deleting its mail, so a batch in flight can't write it back.
+        let sync = sync
+        Task {
+            await sync.forget(email)
+            do {
+                try repo.removeAccount(email)
+                secrets.removeTokens(for: email)
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
             if scope == email { scope = nil }
             closeThread()
             loadAccounts()
             reload(resetSelection: true)
-        } catch {
-            showToast(error.localizedDescription, isError: true)
         }
     }
 
@@ -626,10 +630,10 @@ final class AppStore: ObservableObject {
         guard let thread = currentThread else { return }
         let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [SystemLabel.trash], remove: [SystemLabel.inbox])) ?? []
         advance(after: thread)
-        remote(thread.account) { try await $0.trashThread(id: thread.threadId) }
+        remote(thread, rollback: snapshots) { try await $0.trashThread(id: thread.threadId) }
         showToast("Moved to Trash", undo: { [weak self] in
             try? self?.repo.restore(snapshots)
-            self?.remote(thread.account) { try await $0.untrashThread(id: thread.threadId) }
+            self?.remote(thread, rollback: []) { try await $0.untrashThread(id: thread.threadId) }
         })
     }
 
@@ -638,9 +642,9 @@ final class AppStore: ObservableObject {
         if thread.isStarred || openMessages.contains(where: \.isStarred) {
             changeLabels(thread, add: [], remove: [SystemLabel.starred], message: nil)
         } else {
-            _ = try? repo.modifyMessage(account: thread.account, id: thread.latestMessageId, add: [SystemLabel.starred], remove: [])
+            let snapshots = (try? repo.modifyMessage(account: thread.account, id: thread.latestMessageId, add: [SystemLabel.starred], remove: [])) ?? []
             refreshAfterChange(thread)
-            remote(thread.account) { try await $0.modifyMessage(id: thread.latestMessageId, add: [SystemLabel.starred], remove: []) }
+            remote(thread, rollback: snapshots) { try await $0.modifyMessage(id: thread.latestMessageId, add: [SystemLabel.starred], remove: []) }
         }
     }
 
@@ -656,8 +660,8 @@ final class AppStore: ObservableObject {
     }
 
     private func markRead(_ thread: ThreadSummary) {
-        _ = try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [], remove: [SystemLabel.unread])
-        remote(thread.account) { try await $0.modifyThread(id: thread.threadId, add: [], remove: [SystemLabel.unread]) }
+        let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [], remove: [SystemLabel.unread])) ?? []
+        remote(thread, rollback: snapshots) { try await $0.modifyThread(id: thread.threadId, add: [], remove: [SystemLabel.unread]) }
         scheduleReload()
     }
 
@@ -665,12 +669,12 @@ final class AppStore: ObservableObject {
     private func changeLabels(_ thread: ThreadSummary, add: Set<String>, remove: Set<String>, message: String?) {
         let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: add, remove: remove)) ?? []
         if message != nil { advance(after: thread) } else { refreshAfterChange(thread) }
-        remote(thread.account) { try await $0.modifyThread(id: thread.threadId, add: Array(add), remove: Array(remove)) }
+        remote(thread, rollback: snapshots) { try await $0.modifyThread(id: thread.threadId, add: Array(add), remove: Array(remove)) }
 
         if let message {
             showToast(message, undo: { [weak self] in
                 try? self?.repo.restore(snapshots)
-                self?.remote(thread.account) { try await $0.modifyThread(id: thread.threadId, add: Array(remove), remove: Array(add)) }
+                self?.remote(thread, rollback: []) { try await $0.modifyThread(id: thread.threadId, add: Array(remove), remove: Array(add)) }
             })
         }
     }
@@ -698,15 +702,22 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Runs a Gmail call in the background. On failure, tells the user and resyncs so local state matches the server.
-    private func remote(_ account: String, _ operation: @escaping @Sendable (GmailService) async throws -> Void) {
+    /// Mirrors a local change to Gmail in the background. If Gmail refuses, the local change is rolled back and the
+    /// conversation is re-read from Gmail, so Nook never shows a state Gmail doesn't have. (A history sync can't fix
+    /// this on its own: a change Gmail never applied leaves no history to replay.)
+    private func remote(
+        _ thread: ThreadSummary, rollback: [LabelSnapshot],
+        _ operation: @escaping @Sendable (GmailService) async throws -> Void
+    ) {
         let sync = sync
         Task {
             do {
-                try await operation(try await sync.service(for: account))
+                try await operation(try await sync.service(for: thread.account))
             } catch {
-                showToast("Couldn't update Gmail: \(error.localizedDescription)", isError: true)
-                syncNow()
+                try? repo.restore(rollback)
+                reload()
+                showToast("Couldn't update Gmail, so the change was undone. \(error.localizedDescription)", isError: true)
+                try? await sync.refreshThread(account: thread.account, threadId: thread.threadId)
             }
         }
     }
@@ -721,18 +732,30 @@ final class AppStore: ObservableObject {
 
     // MARK: Compose
 
+    /// Opens a new draft unless one is already open: replacing it would throw away what's been typed.
+    private func openDraft(_ new: Draft) {
+        guard draft == nil else {
+            showToast("Finish or discard the message you're writing first.")
+            return
+        }
+        draft = new
+    }
+
     func compose() {
-        draft = Draft(from: scope ?? accounts.first?.email ?? "")
+        openDraft(Draft(from: scope ?? accounts.first?.email ?? ""))
     }
 
     func reply(_ kind: ReplyComposer.Kind) {
         guard let thread = currentThread else { return }
         let messages = openThread?.id == thread.id ? openMessages : repo.threadMessages(account: thread.account, threadId: thread.threadId)
         guard let latest = messages.last else { return }
-        draft = ReplyComposer.draft(kind, to: latest, account: thread.account)
+        openDraft(ReplyComposer.draft(kind, to: latest, account: thread.account))
     }
 
     func send(_ draft: Draft) {
+        // A second ⌘↵ during the sheet's closing animation must not send the same message twice.
+        guard !sendingDrafts.contains(draft.id) else { return }
+        sendingDrafts.insert(draft.id)
         self.draft = nil
         let name = account(for: draft.from)?.name ?? ""
         let raw = MIMEBuilder.gmailRaw(draft, fromName: name)
@@ -744,8 +767,14 @@ final class AppStore: ObservableObject {
                 showToast("Sent")
                 syncNow()
             } catch {
-                showToast("Couldn't send: \(error.localizedDescription)", isError: true)
-                self.draft = draft
+                sendingDrafts.remove(draft.id)
+                // Bring the draft back, unless another one is open by now; never overwrite it.
+                if self.draft == nil {
+                    self.draft = draft
+                    showToast("Couldn't send: \(error.localizedDescription)", isError: true)
+                } else {
+                    showToast("Couldn't send \"\(draft.subject)\": \(error.localizedDescription)", isError: true)
+                }
             }
         }
     }
@@ -760,13 +789,13 @@ final class AppStore: ObservableObject {
         switch link {
         case let .compose(from, to, cc, subject, body):
             let sender = from.flatMap { account(for: $0)?.email } ?? scope ?? accounts.first?.email ?? ""
-            draft = Draft(from: sender, to: to, cc: cc, subject: subject, body: body)
+            openDraft(Draft(from: sender, to: to, cc: cc, subject: subject, body: body))
         case let .reply(account, threadId, body, all):
             let messages = repo.threadMessages(account: account, threadId: threadId)
             guard let latest = messages.last else { return showToast("That conversation isn't on this Mac.", isError: true) }
             var reply = ReplyComposer.draft(all ? .replyAll : .reply, to: latest, account: account)
             reply.body = body + reply.body
-            draft = reply
+            openDraft(reply)
         case let .open(account, threadId):
             guard let thread = repo.threads(ThreadQuery(account: account, mailbox: .all, limit: 5000)).first(where: { $0.threadId == threadId }) else {
                 return showToast("That conversation isn't on this Mac.", isError: true)

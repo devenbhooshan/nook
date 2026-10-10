@@ -9,6 +9,12 @@ public enum KeyCommand: Equatable, Sendable {
     case nextSplit, previousSplit
     case toggleUnreadFilter
     case go(Mailbox)
+
+    /// Whether holding the key down should repeat the command. Only movement does: a held "e" or Delete must
+    /// not archive or trash a dozen conversations a second.
+    public var repeatsWhenHeld: Bool {
+        self == .next || self == .previous
+    }
 }
 
 /// Turns single key presses into commands. Superhuman-style: one key per action, and `g` starts

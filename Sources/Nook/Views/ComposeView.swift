@@ -6,12 +6,16 @@ struct ComposeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Draft
     @State private var showCc: Bool
+    @State private var confirmDiscard = false
+    /// What the draft looked like when it opened, to tell whether discarding would lose anything.
+    private let original: Draft
     @FocusState private var focus: Field?
 
     private enum Field: Hashable { case to, cc, subject, body }
 
     init(draft: Draft) {
         _draft = State(initialValue: draft)
+        original = draft
         _showCc = State(initialValue: !draft.cc.isEmpty)
     }
 
@@ -60,8 +64,16 @@ struct ComposeView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Button("Discard") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                Button("Discard") {
+                    if hasEdits { confirmDiscard = true } else { dismiss() }
+                }
+                .keyboardShortcut(.cancelAction)
+                .confirmationDialog("Discard this message?", isPresented: $confirmDiscard) {
+                    Button("Discard", role: .destructive) { dismiss() }
+                    Button("Keep Writing", role: .cancel) {}
+                } message: {
+                    Text("What you've written will be lost.")
+                }
                 Button {
                     store.send(draft)
                 } label: {
@@ -89,6 +101,10 @@ struct ComposeView: View {
         if draft.inReplyTo != nil { return "Reply" }
         if draft.subject.hasPrefix("Fwd:") { return "Forward" }
         return "New message"
+    }
+
+    private var hasEdits: Bool {
+        draft.to != original.to || draft.cc != original.cc || draft.subject != original.subject || draft.body != original.body
     }
 
     private var canSend: Bool {

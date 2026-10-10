@@ -224,30 +224,40 @@ enum Schema {
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
         guard current < version else { return }
-        if current < 1 { try createTables(db) }
-        if current < 2 { try addSplitTags(db, seeded: current < 1) }
-        if current < 3 { try splitOutBodies(db) }
-        if current < 4 {
-            try db.run(ThreadIndex.createSQL)
-            try ThreadIndex.rebuild(db)
+        // Each step is safe to re-run and is recorded as soon as it's done, so an interrupted upgrade
+        // (quit, crash, full disk) resumes where it stopped instead of failing on every launch.
+        let steps: [(Int, () throws -> Void)] = [
+            (1, { try createTables(db) }),
+            (2, { try addSplitTags(db, seeded: current < 1) }),
+            (3, { try splitOutBodies(db) }),
+            (4, {
+                try db.run(ThreadIndex.createSQL)
+                try ThreadIndex.rebuild(db)
+            }),
+            (5, {
+                // Full-text rows were found by account and id, which FTS can't index, so every update scanned
+                // the whole search index. Remember each message's search rowid instead.
+                try db.run("""
+                CREATE TABLE IF NOT EXISTS fts_map(
+                    account TEXT NOT NULL, id TEXT NOT NULL, fts_rowid INTEGER NOT NULL, PRIMARY KEY(account, id));
+                INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) SELECT account, id, rowid FROM messages_fts;
+                """)
+            }),
+            (6, {
+                // Where an unfinished first sync started, so an interrupted one resumes instead of starting over.
+                if try !hasColumn(db, table: "accounts", column: "pending_history_id") {
+                    try db.run("ALTER TABLE accounts ADD COLUMN pending_history_id TEXT")
+                }
+            }),
+        ]
+        for (number, step) in steps where current < number {
+            try step()
+            try db.run("PRAGMA user_version = \(number)")
         }
-        if current < 5 {
-            // Full-text rows were found by account and id, which FTS can't index, so every update scanned
-            // the whole search index. Remember each message's search rowid instead.
-            try db.run("""
-            CREATE TABLE IF NOT EXISTS fts_map(
-                account TEXT NOT NULL, id TEXT NOT NULL, fts_rowid INTEGER NOT NULL, PRIMARY KEY(account, id));
-            INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) SELECT account, id, rowid FROM messages_fts;
-            """)
-        }
-        if current < 6 {
-            // Where an unfinished first sync started, so an interrupted one resumes instead of starting over.
-            let columns = Set(try db.query("PRAGMA table_info(accounts)").map { $0.string("name") })
-            if !columns.contains("pending_history_id") {
-                try db.run("ALTER TABLE accounts ADD COLUMN pending_history_id TEXT")
-            }
-        }
-        try db.run("PRAGMA user_version = \(version)")
+    }
+
+    static func hasColumn(_ db: Database, table: String, column: String) throws -> Bool {
+        try db.query("PRAGMA table_info(\(table))").contains { $0.string("name") == column }
     }
 
     /// Version 1: the original schema.
@@ -320,8 +330,7 @@ enum Schema {
             )
             """)
             // Safe to re-run: only move bodies if they're still inline.
-            let columns = Set(try db.query("PRAGMA table_info(messages)").map { $0.string("name") })
-            guard columns.contains("body_html") else { return }
+            guard try hasColumn(db, table: "messages", column: "body_html") else { return }
             try db.run("""
             INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text)
                 SELECT account, id, body_html, body_text FROM messages;
@@ -333,7 +342,9 @@ enum Schema {
 
     /// Version 2: tags can be inbox tabs. New stores get the default tags; upgraded ones get tabs for the default names.
     private static func addSplitTags(_ db: Database, seeded: Bool) throws {
-        try db.run("ALTER TABLE tags ADD COLUMN split INTEGER NOT NULL DEFAULT 0")
+        if try !hasColumn(db, table: "tags", column: "split") {
+            try db.run("ALTER TABLE tags ADD COLUMN split INTEGER NOT NULL DEFAULT 0")
+        }
         let tagCount = try db.query("SELECT COUNT(*) AS n FROM tags").first?.int("n") ?? 0
         if seeded || tagCount == 0 {
             for (position, tag) in Tag.defaults.enumerated() {

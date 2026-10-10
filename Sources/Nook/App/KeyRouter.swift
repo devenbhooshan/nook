@@ -25,6 +25,8 @@ final class KeyRouter {
 
     private func handle(_ event: NSEvent) -> Bool {
         guard let store, let window = event.window, window === store.mainWindow, window.attachedSheet == nil else { return false }
+        // During onboarding the inbox isn't on screen, so shortcuts would act on mail nobody can see.
+        guard store.onboardingStep == .done else { return false }
         guard !store.showPalette, store.draft == nil else { return false }
         if let responder = window.firstResponder as? NSTextView, responder.isEditable { return false }
 
@@ -49,6 +51,8 @@ final class KeyRouter {
             // A pending "g" swallows its key, so it doesn't beep.
             return interpreter.isAwaitingSequence
         }
+        // Holding a key repeats movement only. A held "e" or Delete must not archive or trash a dozen threads.
+        if event.isARepeat, !command.repeatsWhenHeld { return true }
         perform(command, store: store)
         return true
     }

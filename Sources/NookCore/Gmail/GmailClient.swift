@@ -145,7 +145,8 @@ public struct GmailClient: GmailService {
     public func send(raw: String, threadId: String?) async throws {
         var body: [String: Any] = ["raw": raw]
         if let threadId { body["threadId"] = threadId }
-        _ = try await request("messages/send", method: "POST", body: body)
+        // A 5xx on send can arrive after Gmail already accepted the message; retrying could send it twice.
+        _ = try await request("messages/send", method: "POST", body: body, retryServerErrors: false)
     }
 
     // MARK: Transport
@@ -155,7 +156,10 @@ public struct GmailClient: GmailService {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    func request(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil) async throws -> Data {
+    func request(
+        _ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil,
+        retryServerErrors: Bool = true
+    ) async throws -> Data {
         var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query }
         let bodyData = try body.map { try JSONSerialization.data(withJSONObject: $0) }
@@ -182,6 +186,8 @@ public struct GmailClient: GmailService {
                 refreshed = true
             case 404:
                 throw GmailError.notFound
+            case 500..<600 where !retryServerErrors:
+                throw GmailError.http(status: response.statusCode, message: Self.message(from: data))
             case 403 where Self.isRateLimit(data), 429, 500..<600:
                 // Gmail reports per-user rate limits as 403, not 429. Those are temporary, so wait and retry.
                 guard attempt < maxRetries else {

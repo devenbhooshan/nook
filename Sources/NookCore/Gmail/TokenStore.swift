@@ -17,11 +17,16 @@ public struct TokenSet: Codable, Sendable, Equatable {
 /// Where secrets live. The app uses the Keychain; tests use memory.
 public protocol SecretStore: Sendable {
     func data(for key: String) -> Data?
+    /// Like `data(for:)`, but throws for anything other than "not found" (a locked keychain, a denied prompt…),
+    /// so callers that would otherwise create a replacement secret can tell "missing" from "unreadable".
+    func lookup(_ key: String) throws -> Data?
     func set(_ data: Data, for key: String) throws
     func remove(_ key: String)
 }
 
 public extension SecretStore {
+    func lookup(_ key: String) throws -> Data? { data(for: key) }
+
     func tokens(for email: String) -> TokenSet? {
         data(for: "token:\(email)").flatMap { try? JSONDecoder().decode(TokenSet.self, from: $0) }
     }
@@ -68,12 +73,20 @@ public struct KeychainStore: SecretStore {
     }
 
     public func data(for key: String) -> Data? {
+        try? lookup(key)
+    }
+
+    public func lookup(_ key: String) throws -> Data? {
         var q = query(key)
         q[kSecReturnData as String] = true
         q[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? Data
+        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        switch status {
+        case errSecSuccess: return result as? Data
+        case errSecItemNotFound: return nil
+        default: throw KeychainError(status: status)
+        }
     }
 
     public func set(_ data: Data, for key: String) throws {

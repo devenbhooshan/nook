@@ -46,6 +46,14 @@ struct ShortcutTests {
         }
     }
 
+    @Test func onlyMovementRepeatsWhenAKeyIsHeld() {
+        #expect(KeyCommand.next.repeatsWhenHeld)
+        #expect(KeyCommand.previous.repeatsWhenHeld)
+        for destructive in [KeyCommand.archive, .trash, .toggleStar, .toggleRead, .reply, .compose, .undo, .go(.inbox)] {
+            #expect(!destructive.repeatsWhenHeld, "\(destructive)")
+        }
+    }
+
     @Test func goToSequenceTimesOut() {
         var interpreter = ShortcutInterpreter()
         let start = Date()

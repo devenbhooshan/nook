@@ -59,10 +59,33 @@ public actor SyncEngine {
     }
 
     /// Drops the cached client, for example after the account is removed.
-    public func forget(_ email: String) {
+    /// Drops the account's client and stops its sync, waiting until the sync has actually finished, so nothing
+    /// is written for the account after this returns.
+    public func forget(_ email: String) async {
         services[email] = nil
-        running[email]?.cancel()
+        let task = running[email]
         running[email] = nil
+        task?.cancel()
+        _ = try? await task?.value
+    }
+
+    /// Re-reads one conversation's labels from Gmail, so local state matches the server after a change Gmail
+    /// refused. Messages Gmail no longer has (or that moved to spam) are removed locally.
+    public func refreshThread(account: String, threadId: String) async throws {
+        let service = try service(for: account)
+        for message in repo.threadMessages(account: account, threadId: threadId) {
+            do {
+                let labels = try await service.message(id: message.id, format: .minimal).labelIds ?? []
+                if Self.shouldStore(labels: labels) {
+                    try repo.setLabels(Set(labels), account: account, messageId: message.id)
+                } else {
+                    try repo.deleteMessages(account: account, ids: [message.id])
+                }
+            } catch GmailError.notFound {
+                try repo.deleteMessages(account: account, ids: [message.id])
+            }
+        }
+        onChange()
     }
 
     @discardableResult
@@ -75,6 +98,7 @@ public actor SyncEngine {
     }
 
     private func performSync(_ email: String) async throws -> SyncReport {
+        guard repo.account(email) != nil else { throw CancellationError() }
         let service = try service(for: email)
         if let cursor = repo.account(email)?.historyId, !cursor.isEmpty {
             do {
@@ -204,6 +228,9 @@ public actor SyncEngine {
             try Task.checkCancellation()
             let batch = Array(ids[start..<min(start + batchSize, ids.count)])
             let fetched = try await fetch(batch, format: .full, service: service)
+            // The account may have been removed while this batch downloaded.
+            try Task.checkCancellation()
+            guard repo.account(account) != nil else { throw CancellationError() }
             let messages = fetched
                 .filter { Self.shouldStore(labels: $0.labelIds ?? []) }
                 .map { MIMEParser.message(from: $0, account: account) }

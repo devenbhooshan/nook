@@ -54,8 +54,12 @@ if [[ -n "$identity" ]]; then
     signing=(--options runtime)
 else
     signing_keychain="$HOME/Library/Application Support/Nook/Signing/signing.keychain-db"
-    if [[ -f "$signing_keychain" ]]; then
-        security unlock-keychain -p "nook-local-signing" "$signing_keychain"
+    signing_password="$(security find-generic-password -s "Nook Local Signing Keychain" -a "$USER" -w 2>/dev/null || true)"
+    if [[ -f "$signing_keychain" && -z "$signing_password" ]]; then
+        echo "warning: the local signing keychain predates random passwords; re-run scripts/setup-signing.sh" >&2
+    fi
+    if [[ -f "$signing_keychain" && -n "$signing_password" ]]; then
+        security unlock-keychain -p "$signing_password" "$signing_keychain"
         identity="$(security find-identity -v -p codesigning "$signing_keychain" | awk '/Nook Local Signing/ { print $2; exit }')"
         if [[ -n "$identity" ]]; then
             signing=(--keychain "$signing_keychain")

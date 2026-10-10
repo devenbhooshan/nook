@@ -21,9 +21,9 @@
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
-- **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9.
+- **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Works with your AI assistant.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and draft replies for you to review. It's off until you turn it on.
-- **Native.** SwiftUI, light and dark mode, and a small binary with no dependencies.
+- **Native.** SwiftUI, light and dark mode, and a single pinned dependency (SQLCipher, for encryption).
 
 | Reader | Dark mode | Command palette |
 | --- | --- | --- |
@@ -124,9 +124,9 @@ Each tag has a name and a plain-language description. The model reads the descri
 
 Tags marked **Inbox tab** become tabs across the top of the inbox. By default those are Needs Reply, Newsletter, Receipt and Notification. Conversations that don't fall into any tab show up under **Other**.
 
-The **Unread** toggle at the end of the tab bar (or `⇧U`) shows only conversations with something unread, and Nook remembers it, so your inbox can open to just what's new. A conversation you read stays in the list until you switch tabs or accounts, so it doesn't vanish while you're in it.
+**Unread only**, in the account menu at the top left (or `⇧U`), shows only conversations with something unread, and Nook remembers it, so your inbox can open to just what's new. A conversation you read stays in the list until you switch tabs or accounts, so it doesn't vanish while you're in it.
 
-Nook avoids counters on purpose: no badges or tallies. A tab with unread mail just reads a little darker, and the sidebar uses a small dot.
+Inside the app, Nook avoids counters on purpose: a tab with unread mail just reads a little darker, and the sidebar uses a small dot. The one number is optional: the unread count on the Dock icon, which you can turn off in **Settings → General**.
 
 Tagging starts as soon as mail arrives, newest first, alongside the sync. See [Setting up tagging](#2-setting-up-tagging) to choose the engine.
 
@@ -200,6 +200,10 @@ Tests/
 
 **How encryption works.** On first launch Nook creates a random 256-bit key and keeps it in the Keychain, tied to this Mac. The whole store, including the search index, is encrypted with [SQLCipher](https://www.zetetic.net/sqlcipher/) (AES-256), pinned to a checksum-verified release. Upgrading from an unencrypted store converts it in place on first launch. `nook-mcp` is signed with the app's identity, so it can read the key without a prompt. A store copied to another Mac can't be opened there: Nook sets it aside and downloads your mail again.
 
+**What encryption does and doesn't protect against.** It keeps your mail unreadable to other user accounts, to anyone with your disk or backups but not your Mac login, and to tools that read files directly. It doesn't protect against malicious software already running as you: like any app, Nook can't defend its data from code with your own permissions, which can read the Keychain the same way Nook does. When an older, unencrypted store is converted, the old file is deleted but not overwritten, so pieces of it can linger in free disk space or older backups. Keep FileVault on, which encrypts the whole disk.
+
+The MCP on/off switch in Settings is a consent setting, not a security boundary: it stops well-behaved assistants, but software running as you could change it.
+
 **Where data lives.**
 
 | What | Where |
@@ -233,11 +237,13 @@ No identity or credentials live in the repository. Forks sign with their own (`N
 
 `scripts/test.sh` adds the framework paths Swift Testing needs when only the Command Line Tools are installed. With Xcode, plain `swift test` works too.
 
-Demo mode accepts flags that are handy for screenshots: `--open <n>`, `--compose`, `--palette`, `--unread`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark` and `--windowed`.
+Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`.
 
-To try the MCP server against a scratch store without the app setting: `NOOK_MCP_ENABLED=1 swift run nook-mcp --database /tmp/nook.sqlite`.
+To try the MCP server against a scratch store in a debug build: `NOOK_MCP_ENABLED=1 swift run nook-mcp --database /tmp/nook.sqlite` (or set `NOOK_DATABASE`). Release builds ignore `NOOK_MCP_ENABLED` and only honor the switch in Settings.
 
-Regenerate the app icon with `swift scripts/make-icon.swift icon.png`.
+Local and ad hoc builds can't use the hardened runtime, which requires a Team ID. Builds you share should be signed with a Developer ID.
+
+Regenerate the app icon with `swift scripts/make-icon.swift docs/icon.png`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
