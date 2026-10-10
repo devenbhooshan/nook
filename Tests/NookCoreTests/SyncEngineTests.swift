@@ -63,11 +63,14 @@ struct SyncEngineTests {
     @Test func incrementalSyncWithNoChangesIsCheap() async throws {
         try await engine.sync(account)
         await gmail.resetCounters()
+        try repo.setHistoryId("100", for: account, syncedAt: Date(timeIntervalSince1970: 0))
 
         let report = try await engine.sync(account)
         #expect(report == SyncReport(kind: .incremental))
         #expect(await gmail.fullFetches.isEmpty)
         #expect(await gmail.historyCalls == 1)
+        // Even with nothing new, "last synced" moves forward.
+        #expect((repo.account(account)?.lastSync ?? .distantPast) > Date(timeIntervalSinceNow: -60))
     }
 
     @Test func labelChangesWithoutLabelsAreRefetchedMinimally() async throws {
@@ -126,6 +129,36 @@ struct SyncEngineTests {
         #expect(await gmail.fullFetches.isEmpty)
         #expect(repo.message(account: account, id: "2")?.isUnread == false)
         #expect(repo.account(account)?.historyId == "150")
+    }
+
+    @Test func anInterruptedFirstSyncResumesWithoutStartingOver() async throws {
+        await engine.configure(batchSize: 1)
+        await gmail.rateLimit(after: 2)
+
+        // Gmail stops answering partway through the first download.
+        await #expect(throws: GmailError.rateLimited) { try await engine.sync(account) }
+        #expect(repo.messageIds(account: account).count == 2)
+        #expect(repo.account(account)?.historyId == nil)
+        #expect(repo.pendingHistoryId(for: account) == "100")
+
+        // Meanwhile, mail keeps changing.
+        await gmail.relabel("1", labels: ["INBOX", "STARRED"], historyId: "101")
+        await gmail.rateLimit(after: nil)
+        await gmail.resetCounters()
+
+        // The retry fetches only what's missing, re-checks no labels, and keeps the original starting point…
+        let resumed = try await engine.sync(account)
+        #expect(resumed.kind == .full)
+        #expect(resumed.added == 1)
+        #expect(await gmail.minimalFetches.isEmpty)
+        #expect(await gmail.fullFetches.count == 1)
+        #expect(repo.account(account)?.historyId == "100")
+        #expect(repo.pendingHistoryId(for: account) == nil)
+
+        // …so the change made during the outage is replayed by the next, incremental sync.
+        let next = try await engine.sync(account)
+        #expect(next.kind == .incremental)
+        #expect(repo.message(account: account, id: "1")?.isStarred == true)
     }
 
     @Test func concurrentSyncsForOneAccountShareOneRun() async throws {

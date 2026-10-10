@@ -48,6 +48,8 @@ actor FakeGmail: GmailService {
     var historyId = "100"
     var pendingHistory: [GmailHistoryRecord] = []
     var historyExpired = false
+    /// Simulates Gmail's rate limit: full fetches start failing once this many have succeeded.
+    var rateLimitAfterFullFetches: Int?
     private(set) var fullFetches: [String] = []
     private(set) var minimalFetches: [String] = []
     private(set) var historyCalls = 0
@@ -78,6 +80,8 @@ actor FakeGmail: GmailService {
     }
 
     func expireHistory() { historyExpired = true }
+    func rateLimit(after fetches: Int?) { rateLimitAfterFullFetches = fetches }
+    func setHistoryId(_ id: String) { historyId = id }
 
     // MARK: GmailService
 
@@ -94,6 +98,7 @@ actor FakeGmail: GmailService {
 
     func message(id: String, format: GmailMessageFormat) async throws -> GmailMessage {
         guard let message = messages[id] else { throw GmailError.notFound }
+        if format == .full, let limit = rateLimitAfterFullFetches, fullFetches.count >= limit { throw GmailError.rateLimited }
         if format == .full { fullFetches.append(id) } else { minimalFetches.append(id) }
         return format == .full ? message : GmailMessage(id: id, threadId: message.threadId, labelIds: message.labelIds)
     }

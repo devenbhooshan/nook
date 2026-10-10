@@ -16,11 +16,12 @@ public actor RateLimiter {
     private let sleep: Sleep
 
     /// - Parameters:
-    ///   - unitsPerSecond: The steady rate. Defaults to 200, comfortably under Gmail's 250.
+    ///   - unitsPerSecond: The steady rate. Defaults to 125, half of Gmail's 250, leaving room for anything
+    ///     else using the account and for Google counting a little differently than documented.
     ///   - burst: How many units can go out at once after a quiet spell.
     public init(
-        unitsPerSecond: Double = 200,
-        burst: Double = 400,
+        unitsPerSecond: Double = 125,
+        burst: Double = 250,
         now: @escaping @Sendable () -> Date = { Date() },
         sleep: @escaping Sleep = { seconds in try? await Task.sleep(for: .seconds(seconds)) }
     ) {

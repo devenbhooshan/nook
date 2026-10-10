@@ -5,6 +5,8 @@ public enum GmailError: Error, LocalizedError, Equatable {
     case notFound
     case unauthorized
     case http(status: Int, message: String)
+    /// Gmail's per-user rate limit, still hit after backing off. Temporary: the next sync picks up where this left off.
+    case rateLimited
     case notSignedIn(String)
 
     public var errorDescription: String? {
@@ -12,6 +14,7 @@ public enum GmailError: Error, LocalizedError, Equatable {
         case .notFound: "Gmail couldn't find that item."
         case .unauthorized: "Gmail rejected the sign-in. Remove and re-add the account."
         case .http(let status, let message): "Gmail error \(status): \(message)"
+        case .rateLimited: "Gmail asked Nook to slow down. Syncing resumes automatically in a minute."
         case .notSignedIn(let email): "\(email) isn't signed in."
         }
     }
@@ -181,7 +184,10 @@ public struct GmailClient: GmailService {
                 throw GmailError.notFound
             case 403 where Self.isRateLimit(data), 429, 500..<600:
                 // Gmail reports per-user rate limits as 403, not 429. Those are temporary, so wait and retry.
-                guard attempt < maxRetries else { throw GmailError.http(status: response.statusCode, message: Self.message(from: data)) }
+                guard attempt < maxRetries else {
+                    if response.statusCode == 429 || Self.isRateLimit(data) { throw GmailError.rateLimited }
+                    throw GmailError.http(status: response.statusCode, message: Self.message(from: data))
+                }
                 await retryDelay(attempt, response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init))
                 attempt += 1
             default:

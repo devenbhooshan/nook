@@ -80,30 +80,48 @@ public actor SyncEngine {
             do {
                 return try await incrementalSync(email, service: service, cursor: cursor)
             } catch GmailError.notFound {
-                // History older than about a week expires. Start over.
+                // History older than about a week expires. Start over, and re-check labels we can no longer replay.
+                try repo.setPendingHistoryId(nil, for: email)
+                return try await fullSync(email, service: service, refreshKnownLabels: true)
             }
         }
-        return try await fullSync(email, service: service)
+        return try await fullSync(email, service: service, refreshKnownLabels: false)
     }
 
     // MARK: Full
 
-    private func fullSync(_ email: String, service: GmailService) async throws -> SyncReport {
-        // Read the cursor first, so changes made while downloading are replayed next time.
-        let profile = try await service.profile()
+    /// Downloads whatever is missing, then saves a cursor so later syncs are incremental.
+    ///
+    /// The cursor is taken *before* downloading and kept across attempts, so if a first sync is interrupted
+    /// (quit, network, rate limit) the next attempt resumes: it fetches only what's still missing, and history
+    /// from the original cursor replays any changes made in between. Messages already stored don't need their
+    /// labels re-checked, which on a big mailbox meant thousands of requests on every retry.
+    ///
+    /// - Parameter refreshKnownLabels: Re-check labels on stored messages. Only needed when the old cursor
+    ///   expired, because then the changes since can't be replayed.
+    private func fullSync(_ email: String, service: GmailService, refreshKnownLabels: Bool) async throws -> SyncReport {
+        let cursor: String
+        if !refreshKnownLabels, let pending = repo.pendingHistoryId(for: email) {
+            cursor = pending
+        } else {
+            cursor = try await service.profile().historyId
+            try repo.setPendingHistoryId(cursor, for: email)
+        }
+
         let ids = try await service.listMessageIDs(query: initialQuery, limit: initialLimit)
         let known = repo.messageIds(account: email)
 
         var report = SyncReport(kind: .full)
         report.added = try await fetchAndStore(ids.filter { !known.contains($0) }, account: email, service: service)
 
-        // On a resync, refresh labels on messages we already had. Their bodies don't change.
-        let existing = ids.filter(known.contains)
-        if !existing.isEmpty {
-            report.updated = try await refreshLabels(existing, account: email, service: service)
+        if refreshKnownLabels {
+            let existing = ids.filter(known.contains)
+            if !existing.isEmpty {
+                report.updated = try await refreshLabels(existing, account: email, service: service)
+            }
         }
 
-        try repo.setHistoryId(profile.historyId, for: email)
+        try repo.setHistoryId(cursor, for: email)
         onChange()
         return report
     }
@@ -114,7 +132,8 @@ public actor SyncEngine {
         let history = try await service.history(since: cursor)
         var report = SyncReport(kind: .incremental)
         guard !history.records.isEmpty else {
-            if history.historyId != cursor { try repo.setHistoryId(history.historyId, for: email) }
+            // Nothing new, but the account is up to date as of now, so record the time.
+            try repo.setHistoryId(history.historyId, for: email)
             return report
         }
 

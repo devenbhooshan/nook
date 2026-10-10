@@ -102,8 +102,21 @@ public final class MailRepository: @unchecked Sendable {
         }
     }
 
+    /// Saves the sync cursor once a sync completes, and clears any pending first-sync cursor.
     public func setHistoryId(_ historyId: String?, for email: String, syncedAt: Date = Date()) throws {
-        try db.execute("UPDATE accounts SET history_id = ?, last_sync = ? WHERE email = ?", [historyId, syncedAt, email])
+        try db.execute(
+            "UPDATE accounts SET history_id = ?, last_sync = ?, pending_history_id = NULL WHERE email = ?",
+            [historyId, syncedAt, email]
+        )
+    }
+
+    /// The history cursor captured when an unfinished full sync started.
+    public func pendingHistoryId(for email: String) -> String? {
+        (try? db.query("SELECT pending_history_id FROM accounts WHERE email = ?", [email]))?.first?.optionalString("pending_history_id")
+    }
+
+    public func setPendingHistoryId(_ historyId: String?, for email: String) throws {
+        try db.execute("UPDATE accounts SET pending_history_id = ? WHERE email = ?", [historyId, email])
     }
 
     // MARK: Messages

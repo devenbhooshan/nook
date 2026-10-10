@@ -172,7 +172,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 5
+    static let version = 6
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -192,6 +192,13 @@ enum Schema {
                 account TEXT NOT NULL, id TEXT NOT NULL, fts_rowid INTEGER NOT NULL, PRIMARY KEY(account, id));
             INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) SELECT account, id, rowid FROM messages_fts;
             """)
+        }
+        if current < 6 {
+            // Where an unfinished first sync started, so an interrupted one resumes instead of starting over.
+            let columns = Set(try db.query("PRAGMA table_info(accounts)").map { $0.string("name") })
+            if !columns.contains("pending_history_id") {
+                try db.run("ALTER TABLE accounts ADD COLUMN pending_history_id TEXT")
+            }
         }
         try db.run("PRAGMA user_version = \(version)")
     }

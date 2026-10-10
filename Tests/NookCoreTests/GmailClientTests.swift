@@ -56,6 +56,14 @@ struct GmailClientTests {
         #expect(transport.recorded.count == 2)
     }
 
+    @Test func aRateLimitThatOutlastsTheRetriesSaysSoPlainly() async throws {
+        let transport = StubTransport(Array(repeating: .init(403, Self.quotaBody), count: 10))
+        await #expect(throws: GmailError.rateLimited) {
+            _ = try await client(transport).profile()
+        }
+        #expect(GmailError.rateLimited.errorDescription?.contains("slow down") == true)
+    }
+
     @Test func doesNotRetryRealPermissionErrors() async throws {
         let body = #"{"error":{"code":403,"message":"Request had insufficient authentication scopes.","errors":[{"reason":"insufficientPermissions"}]}}"#
         let transport = StubTransport([.init(403, body), .init(200)])
