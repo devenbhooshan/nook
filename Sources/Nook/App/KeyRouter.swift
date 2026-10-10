@@ -30,9 +30,13 @@ final class KeyRouter {
         guard !store.showPalette, store.draft == nil else { return false }
         if let responder = window.firstResponder as? NSTextView, responder.isEditable { return false }
 
-        // Command-key shortcuts belong to the menu bar.
-        let modifiers = event.modifierFlags.intersection([.command, .control, .option])
-        guard modifiers.isEmpty else { return false }
+        // Command-key shortcuts belong to the menu bar. Option is allowed: some keyboard layouts need it to type "#".
+        guard event.modifierFlags.intersection([.command, .control]).isEmpty else { return false }
+        guard let characters = ShortcutInterpreter.shortcutCharacters(
+            characters: event.characters,
+            ignoringModifiers: event.charactersIgnoringModifiers,
+            option: event.modifierFlags.contains(.option)
+        ) else { return false }
 
         if store.showHelp {
             store.showHelp = false
@@ -46,7 +50,7 @@ final class KeyRouter {
         }
 
         guard let command = interpreter.interpret(
-            characters: event.characters ?? "", keyCode: event.keyCode, shift: event.modifierFlags.contains(.shift)
+            characters: characters, keyCode: event.keyCode, shift: event.modifierFlags.contains(.shift)
         ) else {
             // A pending "g" swallows its key, so it doesn't beep.
             return interpreter.isAwaitingSequence

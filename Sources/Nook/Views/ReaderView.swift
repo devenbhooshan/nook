@@ -45,7 +45,7 @@ struct ReaderView: View {
     }
 
     private var hasBlockedContent: Bool {
-        !allowRemote && store.openMessages.contains { EmailHTML.containsRemoteContent($0.bodyHTML) }
+        !allowRemote && store.openMessages.contains(where: MessageRenderCache.containsRemoteContent)
     }
 
     // MARK: Pieces
@@ -190,7 +190,7 @@ struct MessageCard: View {
 
             if isExpanded {
                 EmailWebView(
-                    html: EmailHTML.document(for: message, allowRemoteContent: allowRemoteContent),
+                    html: MessageRenderCache.document(for: message, allowRemoteContent: allowRemoteContent),
                     height: $bodyHeight
                 )
                 .frame(height: bodyHeight)

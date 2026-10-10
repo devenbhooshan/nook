@@ -64,6 +64,8 @@ private struct GeneralSettings: View {
     }
 
     private func setOpenAtLogin(_ enabled: Bool) {
+        // Demo mode never touches your real login items.
+        guard !store.isDemo else { return }
         do {
             if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             loginItemNote = SMAppService.mainApp.status == .requiresApproval
@@ -158,23 +160,32 @@ private struct AccountsSettings: View {
 
 private struct TagsSettings: View {
     @EnvironmentObject private var store: AppStore
-    @State private var tags: [Tag] = []
+    @State private var rows: [TagRow] = []
     @State private var dirty = false
+
+    /// A tag being edited. The id stays put while the name changes, so typing doesn't rebuild the row, and
+    /// `originalName` lets Save carry a renamed tag's assignments over.
+    private struct TagRow: Identifiable, Equatable {
+        let id = UUID()
+        var originalName: String?
+        var tag: Tag
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Form {
                 Section {
-                    ForEach($tags) { $tag in
+                    ForEach($rows) { $row in
+                        let tag = $row.tag
                         HStack(alignment: .top, spacing: 10) {
                             Menu {
                                 ForEach(Theme.palette.indices, id: \.self) { index in
-                                    Button { tag.colorIndex = index; dirty = true } label: {
-                                        Label("Color \(index + 1)", systemImage: tag.colorIndex == index ? "checkmark.circle.fill" : "circle.fill")
+                                    Button { tag.wrappedValue.colorIndex = index; dirty = true } label: {
+                                        Label("Color \(index + 1)", systemImage: tag.wrappedValue.colorIndex == index ? "checkmark.circle.fill" : "circle.fill")
                                     }
                                 }
                             } label: {
-                                Circle().fill(Theme.color(tag.colorIndex)).frame(width: 12, height: 12)
+                                Circle().fill(Theme.color(tag.wrappedValue.colorIndex)).frame(width: 12, height: 12)
                             }
                             .menuStyle(.button)
                             .buttonStyle(.quiet)
@@ -183,23 +194,23 @@ private struct TagsSettings: View {
                             .padding(.top, 4)
 
                             VStack(alignment: .leading, spacing: 4) {
-                                TextField("Name", text: $tag.name)
+                                TextField("Name", text: tag.name)
                                     .textFieldStyle(.plain)
                                     .font(.system(size: 13, weight: .medium))
-                                TextField("Describe which emails get this tag", text: $tag.description, axis: .vertical)
+                                TextField("Describe which emails get this tag", text: tag.description, axis: .vertical)
                                     .textFieldStyle(.plain)
                                     .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1...3)
                             }
-                            Toggle("Inbox tab", isOn: $tag.isSplit)
+                            Toggle("Inbox tab", isOn: tag.isSplit)
                                 .toggleStyle(.switch)
                                 .controlSize(.mini)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
                                 .help("Give this tag its own tab in the split inbox")
                             Button {
-                                tags.removeAll { $0.id == tag.id }
+                                rows.removeAll { $0.id == row.id }
                                 dirty = true
                             } label: {
                                 Image(systemName: "minus.circle").foregroundStyle(.secondary)
@@ -207,10 +218,10 @@ private struct TagsSettings: View {
                             .buttonStyle(.quiet)
                             .help("Remove tag")
                         }
-                        .onChange(of: tag) { dirty = true }
+                        .onChange(of: row) { dirty = true }
                     }
                     Button {
-                        tags.append(Tag(name: uniqueName(), description: "", colorIndex: tags.count))
+                        rows.append(TagRow(tag: Tag(name: uniqueName(), description: "", colorIndex: rows.count)))
                         dirty = true
                     } label: {
                         Label("Add Tag", systemImage: "plus")
@@ -231,8 +242,7 @@ private struct TagsSettings: View {
                 Spacer()
                 Button("Revert") { load() }.disabled(!dirty)
                 Button("Save") {
-                    store.saveTags(tags.filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty })
-                    load()
+                    save()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(!dirty || hasDuplicateNames)
@@ -244,18 +254,33 @@ private struct TagsSettings: View {
     }
 
     private var hasDuplicateNames: Bool {
-        let names = tags.map { $0.name.lowercased() }
+        let names = rows.map { $0.tag.name.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
         return Set(names).count != names.count
     }
 
     private func load() {
-        tags = store.tags
+        rows = store.tags.map { TagRow(originalName: $0.name, tag: $0) }
+        DispatchQueue.main.async { dirty = false }
+    }
+
+    private func save() {
+        var tags: [Tag] = []
+        var renames: [String: String] = [:]
+        for row in rows {
+            var tag = row.tag
+            tag.name = tag.name.trimmingCharacters(in: .whitespaces)
+            guard !tag.name.isEmpty else { continue }
+            if let original = row.originalName, original != tag.name { renames[original] = tag.name }
+            tags.append(tag)
+        }
+        store.saveTags(tags, renames: renames)
+        for index in rows.indices { rows[index].originalName = rows[index].tag.name }
         DispatchQueue.main.async { dirty = false }
     }
 
     private func uniqueName() -> String {
         var index = 1
-        while tags.contains(where: { $0.name == "New Tag \(index)" }) { index += 1 }
+        while rows.contains(where: { $0.tag.name == "New Tag \(index)" }) { index += 1 }
         return "New Tag \(index)"
     }
 }
@@ -287,6 +312,11 @@ private struct IntelligenceSettings: View {
 
             Section("Ollama") {
                 TextField("Server", text: $ollamaURL)
+                if !TaggingSettings.isLocal(ollamaURL: ollamaURL) {
+                    Label("This server isn't on this Mac. Nook sends each email's sender, recipients, subject and the start of its text there to tag it.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.orange)
+                }
                 HStack {
                     if let installedModels, !installedModels.isEmpty {
                         Picker("Model", selection: $ollamaModel) {

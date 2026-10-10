@@ -52,6 +52,8 @@ struct EmailWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         @Binding var height: CGFloat
         private var loadedHTML: String?
+        /// Set just before Nook loads a message, so that load is the one navigation the view allows.
+        private var allowsNextLoad = false
 
         init(height: Binding<CGFloat>) {
             _height = height
@@ -60,6 +62,7 @@ struct EmailWebView: NSViewRepresentable {
         func load(_ html: String, in webView: WKWebView) {
             guard html != loadedHTML else { return }
             loadedHTML = html
+            allowsNextLoad = true
             webView.loadHTMLString(html, baseURL: nil)
         }
 
@@ -69,18 +72,20 @@ struct EmailWebView: NSViewRepresentable {
             if abs(newHeight - height) > 1 { height = newHeight }
         }
 
+        @MainActor
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction) async -> WKNavigationActionPolicy {
-            // The initial HTML load is the only navigation allowed inside the view.
-            if action.navigationType == .other, action.request.url?.absoluteString == "about:blank" {
+            // Nook's own load of the message is the only navigation allowed inside the view. Everything else
+            // (meta refresh, frames, forms, file: or data: URLs) is cancelled.
+            if allowsNextLoad, action.targetFrame?.isMainFrame == true, action.request.url?.absoluteString == "about:blank" {
+                allowsNextLoad = false
                 return .allow
             }
-            if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme?.lowercased()) {
-                if action.navigationType == .linkActivated {
-                    NSWorkspace.shared.open(url)
-                }
-                return .cancel
+            // Clicked links open in the browser, but only ordinary web and mail links.
+            if action.navigationType == .linkActivated, let url = action.request.url,
+               ["http", "https", "mailto"].contains(url.scheme?.lowercased()) {
+                NSWorkspace.shared.open(url)
             }
-            return action.navigationType == .other ? .allow : .cancel
+            return .cancel
         }
     }
 }

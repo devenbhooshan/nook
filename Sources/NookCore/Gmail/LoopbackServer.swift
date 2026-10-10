@@ -4,12 +4,19 @@ import Network
 /// A one-shot HTTP listener on 127.0.0.1 that catches the OAuth redirect.
 /// It only listens on the loopback interface and shuts down after the first real callback.
 final class LoopbackServer: @unchecked Sendable {
+    /// The `state` this sign-in sent to Google. Callbacks carrying anything else are answered and ignored, so another
+    /// program (or a web page that finds the port) can't end the sign-in early with a fake or failing callback.
+    private let expectedState: String?
     private let queue = DispatchQueue(label: "com.devenbhooshan.nook.oauth-loopback")
     private var listener: NWListener?
     private var result: Result<[String: String], Error>?
     private var waiter: CheckedContinuation<[String: String], Error>?
     /// Confined to `queue`: whether `start()` has already reported readiness or failure.
     private var startReported = false
+
+    init(expectedState: String? = nil) {
+        self.expectedState = expectedState
+    }
 
     /// Starts listening on a random free port and returns it.
     func start() async throws -> UInt16 {
@@ -86,11 +93,14 @@ final class LoopbackServer: @unchecked Sendable {
             let request = data.map { String(decoding: $0, as: UTF8.self) } ?? ""
             let parameters = Self.callbackParameters(fromRequest: request)
             let isCallback = parameters?["code"] != nil || parameters?["error"] != nil
+            let isOurs = isCallback && (self?.expectedState == nil || parameters?["state"] == self?.expectedState)
 
-            let response = isCallback ? Self.response(status: "200 OK", body: Self.successPage) : Self.response(status: "404 Not Found", body: "")
+            let response = isOurs
+                ? Self.response(status: "200 OK", body: Self.successPage)
+                : Self.response(status: isCallback ? "400 Bad Request" : "404 Not Found", body: "")
             connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
 
-            if isCallback, let parameters { self?.finish(.success(parameters)) }
+            if isOurs, let parameters { self?.finish(.success(parameters)) }
         }
     }
 

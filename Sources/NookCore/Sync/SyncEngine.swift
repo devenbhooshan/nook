@@ -39,10 +39,38 @@ public actor SyncEngine {
     private var services: [String: GmailService] = [:]
     private var running: [String: Task<SyncReport, Error>] = [:]
 
-    public init(repo: MailRepository, makeService: @escaping ServiceFactory, onChange: @escaping @Sendable () -> Void = {}) {
+    private let now: @Sendable () -> Date
+    /// Conversations the user just changed, and until when a sync should leave their labels alone.
+    private var protectedThreads: [ThreadKey: Date] = [:]
+
+    public init(
+        repo: MailRepository, makeService: @escaping ServiceFactory, onChange: @escaping @Sendable () -> Void = {},
+        now: @escaping @Sendable () -> Date = { Date() }
+    ) {
         self.repo = repo
         self.makeService = makeService
         self.onChange = onChange
+        self.now = now
+    }
+
+    /// Shields a conversation the user just changed from label updates for a short while.
+    ///
+    /// A sync that started before the change reached Gmail would otherwise write the old labels back (an archived
+    /// thread popping back into the inbox until the next sync). Once Gmail applies the change it shows up in history,
+    /// which a later sync replays, so skipping stale updates in the meantime loses nothing.
+    public func protect(account: String, threadId: String, for seconds: TimeInterval = 30) {
+        protectedThreads[ThreadKey(account: account, threadId: threadId)] = now().addingTimeInterval(seconds)
+    }
+
+    private func isProtected(account: String, threadId: String?) -> Bool {
+        guard let threadId else { return false }
+        let key = ThreadKey(account: account, threadId: threadId)
+        guard let until = protectedThreads[key] else { return false }
+        if until < now() {
+            protectedThreads[key] = nil
+            return false
+        }
+        return true
     }
 
     public func configure(initialQuery: String? = nil, initialLimit: Int? = nil, batchSize: Int? = nil) {
@@ -139,10 +167,9 @@ public actor SyncEngine {
         report.added = try await fetchAndStore(ids.filter { !known.contains($0) }, account: email, service: service)
 
         if refreshKnownLabels {
-            let existing = ids.filter(known.contains)
-            if !existing.isEmpty {
-                report.updated = try await refreshLabels(existing, account: email, service: service)
-            }
+            // Every stored message, not just the ones in the listing window: mail archived or deleted elsewhere
+            // while the cursor was expired would otherwise stay as it was here, possibly forever.
+            report.updated = try await refreshLabels(Array(known), account: email, service: service)
         }
 
         try repo.setHistoryId(cursor, for: email)
@@ -168,6 +195,8 @@ public actor SyncEngine {
         var labelsUnknown = Set<String>()
         for record in history.records {
             for change in record.messagesAdded ?? [] {
+                // Drafts and spam are never stored, so don't download them only to throw them away.
+                if let labels = change.message.labelIds, !Self.shouldStore(labels: labels) { continue }
                 added.insert(change.message.id)
                 deleted.remove(change.message.id)
             }
@@ -188,12 +217,14 @@ public actor SyncEngine {
 
         let known = repo.messageIds(account: email)
         var toFetch = added
-        // A label change on a message we never downloaded (say, an old one moved back to the inbox) needs the full message.
-        toFetch.formUnion(labels.keys.filter { !known.contains($0) })
-        toFetch.formUnion(labelsUnknown.filter { !known.contains($0) })
+        // A label change on a message we never downloaded only matters if it brings the message somewhere visible
+        // (an old message moved back to the inbox, or starred). Anything else, like "mark all as read" on years of
+        // archived mail in Gmail on the web, would otherwise download thousands of messages nobody looks at.
+        toFetch.formUnion(labels.filter { !known.contains($0.key) && Self.bringsIntoView(labels: $0.value) }.keys)
         toFetch.subtract(deleted)
 
         for (id, ids) in labels where known.contains(id) && !toFetch.contains(id) && !deleted.contains(id) {
+            if isProtected(account: email, threadId: repo.message(account: email, id: id)?.threadId) { continue }
             if Self.shouldStore(labels: ids) {
                 try repo.setLabels(Set(ids), account: email, messageId: id)
             } else {
@@ -222,12 +253,18 @@ public actor SyncEngine {
         !labels.contains(SystemLabel.spam) && !labels.contains(SystemLabel.draft)
     }
 
+    /// Whether these labels put a message somewhere Nook shows it without searching.
+    static func bringsIntoView(labels: [String]) -> Bool {
+        shouldStore(labels: labels) && !labels.contains(SystemLabel.trash)
+            && (labels.contains(SystemLabel.inbox) || labels.contains(SystemLabel.starred))
+    }
+
     private func fetchAndStore(_ ids: [String], account: String, service: GmailService) async throws -> Int {
         var stored = 0
         for start in stride(from: 0, to: ids.count, by: max(1, batchSize)) {
             try Task.checkCancellation()
             let batch = Array(ids[start..<min(start + batchSize, ids.count)])
-            let fetched = try await fetch(batch, format: .full, service: service)
+            let fetched = try await fetch(batch, format: .full, service: service).messages
             // The account may have been removed while this batch downloaded.
             try Task.checkCancellation()
             guard repo.account(account) != nil else { throw CancellationError() }
@@ -244,7 +281,9 @@ public actor SyncEngine {
     private func refreshLabels(_ ids: [String], account: String, service: GmailService) async throws -> Int {
         guard !ids.isEmpty else { return 0 }
         var updated = 0
-        for message in try await fetch(ids, format: .minimal, service: service) {
+        let (messages, missing) = try await fetch(ids, format: .minimal, service: service)
+        for message in messages {
+            if isProtected(account: account, threadId: message.threadId) { continue }
             let labels = message.labelIds ?? []
             if Self.shouldStore(labels: labels) {
                 try repo.setLabels(Set(labels), account: account, messageId: message.id)
@@ -253,21 +292,25 @@ public actor SyncEngine {
             }
             updated += 1
         }
-        return updated
+        // Gmail no longer has these: they were deleted while we weren't looking.
+        try repo.deleteMessages(account: account, ids: missing)
+        return updated + missing.count
     }
 
-    /// Fetches messages with bounded concurrency. Messages deleted in the meantime (404) are skipped.
-    private func fetch(_ ids: [String], format: GmailMessageFormat, service: GmailService) async throws -> [GmailMessage] {
+    /// Fetches messages with bounded concurrency. Messages Gmail no longer has (404) come back in `missing`.
+    private func fetch(
+        _ ids: [String], format: GmailMessageFormat, service: GmailService
+    ) async throws -> (messages: [GmailMessage], missing: [String]) {
         let limit = max(1, maxConcurrentFetches)
-        return try await withThrowingTaskGroup(of: GmailMessage?.self) { group in
+        return try await withThrowingTaskGroup(of: (String, GmailMessage?).self) { group in
             var iterator = ids.makeIterator()
             func addNext() -> Bool {
                 guard let id = iterator.next() else { return false }
                 group.addTask {
                     do {
-                        return try await service.message(id: id, format: format)
+                        return (id, try await service.message(id: id, format: format))
                     } catch GmailError.notFound {
-                        return nil
+                        return (id, nil)
                     }
                 }
                 return true
@@ -275,11 +318,12 @@ public actor SyncEngine {
 
             for _ in 0..<limit where !addNext() { break }
             var results: [GmailMessage] = []
-            while let result = try await group.next() {
-                if let result { results.append(result) }
+            var missing: [String] = []
+            while let (id, result) = try await group.next() {
+                if let result { results.append(result) } else { missing.append(id) }
                 _ = addNext()
             }
-            return results
+            return (results, missing)
         }
     }
 }

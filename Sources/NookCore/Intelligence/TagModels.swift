@@ -135,6 +135,12 @@ public struct TaggingSettings: Sendable, Equatable {
     public static let ollamaModelKey = "tagging.ollamaModel"
     public static let defaultOllamaModel = "llama3.2"
 
+    /// Whether an Ollama server address points at this Mac. Anything else means your mail is sent over the network.
+    public static func isLocal(ollamaURL: String) -> Bool {
+        guard let host = URL(string: ollamaURL.trimmingCharacters(in: .whitespaces))?.host()?.lowercased() else { return false }
+        return ["localhost", "127.0.0.1", "::1", "[::1]"].contains(host)
+    }
+
     public var engine: TagEngine
     public var ollamaURL: URL
     public var ollamaModel: String

@@ -39,11 +39,16 @@ public enum MIMEParser {
     /// Walks the MIME tree and keeps the first HTML and plain-text bodies, skipping attachments.
     static func collectBodies(_ part: GmailMessagePart, html: inout String?, text: inout String?) {
         let mimeType = part.mimeType?.lowercased() ?? ""
+        // Attachments, including attached emails (message/rfc822, which have parts of their own), aren't the body.
+        // Checking before recursing keeps a forwarded email's text from standing in for this message's.
+        if let filename = part.filename, !filename.isEmpty { return }
+        if mimeType == "message/rfc822" { return }
+        let disposition = part.headers?.first { $0.name.caseInsensitiveCompare("Content-Disposition") == .orderedSame }?.value ?? ""
+        if disposition.lowercased().hasPrefix("attachment") { return }
         if mimeType.hasPrefix("multipart/") || part.parts?.isEmpty == false {
             for child in part.parts ?? [] { collectBodies(child, html: &html, text: &text) }
             return
         }
-        if let filename = part.filename, !filename.isEmpty { return }
         guard let encoded = part.body?.data, let data = decodeBase64URL(encoded) else { return }
 
         let contentType = part.headers?.first { $0.name.caseInsensitiveCompare("Content-Type") == .orderedSame }?.value ?? ""
@@ -75,20 +80,23 @@ public enum MIMEParser {
         return value.isEmpty ? nil : value.lowercased()
     }
 
+    /// Decodes body bytes in their declared charset. Gmail returns bodies in the sender's original encoding.
     static func decode(_ data: Data, charset: String?) -> String {
-        let encoding: String.Encoding? = switch charset {
-        case "iso-8859-1", "latin1", "latin-1": .isoLatin1
-        case "windows-1252", "cp1252": .windowsCP1252
-        case "us-ascii", "ascii": .ascii
-        case "utf-16": .utf16
-        case "shift_jis": .shiftJIS
-        case "iso-2022-jp": .iso2022JP
-        case "euc-jp": .japaneseEUC
-        default: nil
+        if let encoding = charset.flatMap(encoding(forCharset:)), let string = String(data: data, encoding: encoding) {
+            return string
         }
-        if let encoding, let string = String(data: data, encoding: encoding) { return string }
         if let string = String(data: data, encoding: .utf8) { return string }
+        // Undeclared and not UTF-8: Windows-1252 maps every byte, so nothing turns into replacement characters.
+        if let string = String(data: data, encoding: .windowsCP1252) { return string }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Any charset name macOS knows (IANA names like iso-8859-2, windows-1251, koi8-r, gb18030, big5, euc-kr).
+    static func encoding(forCharset charset: String) -> String.Encoding? {
+        let name = charset.lowercased() == "latin1" || charset.lowercased() == "latin-1" ? "iso-8859-1" : charset
+        let cfEncoding = CFStringConvertIANACharSetNameToEncoding(name as CFString)
+        guard cfEncoding != kCFStringEncodingInvalidId else { return nil }
+        return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cfEncoding))
     }
 
     /// A readable plain-text version of an HTML body, for search and for the tagger.

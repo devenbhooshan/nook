@@ -74,11 +74,15 @@ final class AppStore: ObservableObject {
     @Published var paletteMode: PaletteMode = .everything
     @Published var showHelp = false
     @Published var draft: Draft?
-    @Published var showSidebar = UserDefaults.standard.bool(forKey: "ui.showSidebar") {
-        didSet { UserDefaults.standard.set(showSidebar, forKey: "ui.showSidebar") }
+    @Published var showSidebar = false {
+        didSet { defaults.set(showSidebar, forKey: "ui.showSidebar") }
     }
     /// The inbox shows only conversations with something unread. Remembered between launches.
-    @Published private(set) var unreadOnly = UserDefaults.standard.bool(forKey: "ui.unreadOnly")
+    @Published private(set) var unreadOnly = false
+
+    /// Where preferences live. Demo mode uses its own, emptied at launch, so it never changes the real app's settings.
+    let defaults: UserDefaults
+    static let demoDefaultsSuite = "com.devenbhooshan.nook.demo"
     /// Conversations read while the unread filter is on stay listed until you change views.
     private var keptVisible: Set<ThreadSummary.ID> = []
     /// How many conversations the list holds. Grows a page at a time as you scroll.
@@ -95,10 +99,12 @@ final class AppStore: ObservableObject {
         mainWindow = window
         isFullScreen = window.styleMask.contains(.fullScreen)
         DemoData.applyWindowOptions(to: window)
+        // Replace, don't add: the window is recreated each time it's reopened from the Dock.
+        windowSubscriptions.removeAll()
         for name in [NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification] {
             NotificationCenter.default.publisher(for: name, object: window)
                 .sink { [weak self, weak window] _ in self?.isFullScreen = window?.styleMask.contains(.fullScreen) ?? false }
-                .store(in: &subscriptions)
+                .store(in: &windowSubscriptions)
         }
     }
 
@@ -106,13 +112,17 @@ final class AppStore: ObservableObject {
     let secrets: SecretStore
     private let sync: SyncEngine
     private let tagger: Tagger
-    private let isDemo: Bool
+    let isDemo: Bool
     private var sendingDrafts: Set<UUID> = []
     /// The previous mail store couldn't be unlocked and was set aside; mail downloads again.
     var startedWithFreshStore = false
     private var demoOnboardingCompleted: Bool? = true
     private var demoTaggingReviewed = true
-    private var undoAction: (() -> Void)?
+    /// Undo for the toast currently on screen; it goes away with the toast.
+    private var undoAction: (id: UUID, action: () -> Void)?
+    /// The last Gmail change sent per account, so changes reach Gmail in the order they were made.
+    private var remoteQueue: [String: Task<Void, Never>] = [:]
+    private var windowSubscriptions = Set<AnyCancellable>()
     private var started = false
     private var reloadPending = false
     private var subscriptions = Set<AnyCancellable>()
@@ -128,7 +138,15 @@ final class AppStore: ObservableObject {
         self.repo = repo
         self.secrets = secrets
         self.isDemo = isDemo
-        if isDemo { unreadOnly = false }
+        if isDemo, let demo = UserDefaults(suiteName: Self.demoDefaultsSuite) {
+            demo.removePersistentDomain(forName: Self.demoDefaultsSuite)
+            defaults = demo
+        } else {
+            defaults = .standard
+        }
+        let defaults = defaults
+        showSidebar = defaults.bool(forKey: "ui.showSidebar")
+        unreadOnly = defaults.bool(forKey: "ui.unreadOnly")
 
         let notify: @Sendable () -> Void = {
             Task { @MainActor in NotificationCenter.default.post(name: .nookDataChanged, object: nil) }
@@ -141,7 +159,9 @@ final class AppStore: ObservableObject {
 
         self.tagger = Tagger(
             repo: repo,
-            modelProvider: { await TaggingSettings.load().resolveModel() },
+            modelProvider: { [suite = isDemo ? Self.demoDefaultsSuite : nil] in
+                await TaggingSettings.load(suite.flatMap(UserDefaults.init(suiteName:)) ?? .standard).resolveModel()
+            },
             onUpdate: { status in
                 Task { @MainActor in
                     NotificationCenter.default.post(name: .nookTaggerStatus, object: nil, userInfo: ["status": status])
@@ -149,7 +169,7 @@ final class AppStore: ObservableObject {
             }
         )
         // Decide between onboarding and the inbox before the first frame, so neither flashes.
-        loadAccounts()
+        loadAccounts(checkSignIns: true)
     }
 
     static func live() -> AppStore {
@@ -218,11 +238,17 @@ final class AppStore: ObservableObject {
 
     // MARK: Loading
 
-    private func loadAccounts() {
+    /// - Parameter checkSignIns: Re-read sign-in state from the Keychain. That's slow-ish, so it happens only at launch
+    ///   and when it can have changed (accounts added or removed, a sync reporting a missing sign-in), not every sync.
+    private func loadAccounts(checkSignIns: Bool = false) {
         accounts = repo.accounts()
-        hasGoogleClient = isDemo || googleConfig.isComplete
-        // Demo accounts never have stored sign-ins; don't call them signed out.
-        signedOutAccounts = isDemo ? [] : accounts.map(\.email).filter { secrets.tokens(for: $0) == nil }
+        if checkSignIns {
+            hasGoogleClient = isDemo || googleConfig.isComplete
+            // Demo accounts never have stored sign-ins; don't call them signed out.
+            signedOutAccounts = isDemo ? [] : accounts.map(\.email).filter { secrets.tokens(for: $0) == nil }
+        } else {
+            signedOutAccounts.removeAll { email in !accounts.contains { $0.email == email } }
+        }
         if let scope, !accounts.contains(where: { $0.email == scope }) { self.scope = nil }
         refreshOnboarding()
     }
@@ -383,7 +409,7 @@ final class AppStore: ObservableObject {
     /// ⇧U: show only unread conversations in the inbox, or everything again.
     func toggleUnreadOnly() {
         unreadOnly.toggle()
-        if !isDemo { UserDefaults.standard.set(unreadOnly, forKey: "ui.unreadOnly") }
+        defaults.set(unreadOnly, forKey: "ui.unreadOnly")
         keptVisible = []
         listLimit = Self.pageSize
         if mailbox != .inbox || isSearching { setMailbox(.inbox) } else { reload(resetSelection: true) }
@@ -473,7 +499,7 @@ final class AppStore: ObservableObject {
             syncErrors = errors.compactMapValues { $0 }
             isSyncing = false
             lastSynced = Date()
-            loadAccounts()
+            loadAccounts(checkSignIns: !syncErrors.isEmpty)
             reload()
             Task.detached { await tagger.run() }
         }
@@ -522,10 +548,18 @@ final class AppStore: ObservableObject {
                 try repo.addAccount(email: result.email, name: result.name)
                 await sync.forget(result.email)
                 NSApp.activate()
-                loadAccounts()
+                loadAccounts(checkSignIns: true)
                 syncErrors[result.email] = nil
                 showToast("Added \(result.email)")
-                syncNow()
+                // Start this account now rather than waiting for a sync round that may already be running.
+                let sync = sync
+                let tagger = tagger
+                Task {
+                    do { try await sync.sync(result.email) } catch { syncErrors[result.email] = error.localizedDescription }
+                    loadAccounts()
+                    reload()
+                    Task.detached { await tagger.run() }
+                }
             } catch is CancellationError {
             } catch {
                 showToast(error.localizedDescription, isError: true)
@@ -566,7 +600,7 @@ final class AppStore: ObservableObject {
     static weak var current: AppStore?
     /// Opens Settings, optionally on a specific tab.
     func openSettings(tab: SettingsTab? = nil) {
-        if let tab { UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey) }
+        if let tab { defaults.set(tab.rawValue, forKey: SettingsTab.storageKey) }
         openSettingsHandler?()
         NSApp.activate()
     }
@@ -582,7 +616,7 @@ final class AppStore: ObservableObject {
 
     /// Unread inbox conversations across all accounts, on the Dock icon. Optional, in Settings → General.
     func updateDockBadge() {
-        let showBadge = UserDefaults.standard.object(forKey: Self.dockBadgeKey) as? Bool ?? true
+        let showBadge = defaults.object(forKey: Self.dockBadgeKey) as? Bool ?? true
         let unread = unreadCounts.values.reduce(0, +)
         let label = showBadge && unread > 0 ? (unread > 999 ? "999+" : "\(unread)") : nil
         if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
@@ -594,13 +628,22 @@ final class AppStore: ObservableObject {
 
     // MARK: Tags
 
-    func saveTags(_ updated: [Tag]) {
-        do {
-            try repo.saveTags(updated)
+    /// Saves the tag list. `renames` (old name → new name) keeps a renamed tag's assignments. Rebuilding the
+    /// conversation index can take a moment on a big mailbox, so it happens off the main thread.
+    func saveTags(_ updated: [Tag], renames: [String: String] = [:]) {
+        let repo = repo
+        Task {
+            do {
+                try await Task.detached { try repo.saveTags(updated, renames: renames) }.value
+            } catch {
+                showToast(error.localizedDescription, isError: true)
+            }
             tags = repo.tags()
+            // If the open tab's tag was renamed or removed, follow the rename or fall back to Everything.
+            if case .tag(let name) = split, !tags.contains(where: { $0.name == name }) {
+                if let renamed = renames[name] { setSplit(.tag(renamed)) } else { setSplit(.everything) }
+            }
             reload()
-        } catch {
-            showToast(error.localizedDescription, isError: true)
         }
     }
 
@@ -688,8 +731,14 @@ final class AppStore: ObservableObject {
 
     /// After a thread leaves the list, move to the next one, like Superhuman.
     private func advance(after thread: ThreadSummary) {
-        let index = threads.firstIndex { $0.id == thread.id } ?? 0
         let wasOpen = openThread?.id == thread.id
+        guard let index = threads.firstIndex(where: { $0.id == thread.id }) else {
+            // Opened from a link or search result that isn't in this list: there's no "next", so just close it,
+            // rather than opening (and marking read) whatever happens to be first.
+            reload()
+            if wasOpen { closeThread() }
+            return
+        }
         reload()
         guard !threads.contains(where: { $0.id == thread.id }) else {
             refreshAfterChange(thread)
@@ -702,15 +751,22 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Mirrors a local change to Gmail in the background. If Gmail refuses, the local change is rolled back and the
-    /// conversation is re-read from Gmail, so Nook never shows a state Gmail doesn't have. (A history sync can't fix
-    /// this on its own: a change Gmail never applied leaves no history to replay.)
+    /// Mirrors a local change to Gmail in the background. Changes for an account go out one at a time, in the order
+    /// they were made, so "archive, then undo" can't reach Gmail as "undo, then archive".
+    ///
+    /// While the change is in flight, the conversation is shielded from a sync that started earlier and would write
+    /// the old labels back. If Gmail refuses, the local change is rolled back and the conversation is re-read from
+    /// Gmail, so Nook never shows a state Gmail doesn't have. (A history sync can't fix that on its own: a change
+    /// Gmail never applied leaves no history to replay.)
     private func remote(
         _ thread: ThreadSummary, rollback: [LabelSnapshot],
         _ operation: @escaping @Sendable (GmailService) async throws -> Void
     ) {
         let sync = sync
-        Task {
+        let previous = remoteQueue[thread.account]
+        remoteQueue[thread.account] = Task {
+            await previous?.value
+            await sync.protect(account: thread.account, threadId: thread.threadId)
             do {
                 try await operation(try await sync.service(for: thread.account))
             } catch {
@@ -722,10 +778,12 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Undoes the action whose toast is on screen. Once the toast is gone, there's nothing to undo,
+    /// so a stray "z" minutes later can't reverse something long forgotten.
     func undo() {
-        guard let action = undoAction else { return }
+        guard let pending = undoAction, toast?.id == pending.id else { return }
         undoAction = nil
-        action()
+        pending.action()
         reload()
         showToast("Undone")
     }
@@ -797,7 +855,7 @@ final class AppStore: ObservableObject {
             reply.body = body + reply.body
             openDraft(reply)
         case let .open(account, threadId):
-            guard let thread = repo.threads(ThreadQuery(account: account, mailbox: .all, limit: 5000)).first(where: { $0.threadId == threadId }) else {
+            guard let thread = repo.thread(account: account, threadId: threadId) else {
                 return showToast("That conversation isn't on this Mac.", isError: true)
             }
             open(thread)
@@ -808,12 +866,13 @@ final class AppStore: ObservableObject {
 
     func showToast(_ message: String, isError: Bool = false, undo: (() -> Void)? = nil) {
         let toast = Toast(message: message, canUndo: undo != nil, isError: isError)
-        undoAction = undo
+        undoAction = undo.map { (toast.id, $0) }
         withAnimation(.snappy(duration: 0.2)) { self.toast = toast }
         Task {
             try? await Task.sleep(for: .seconds(isError ? 6 : 4))
             if self.toast?.id == toast.id {
                 withAnimation(.easeOut(duration: 0.2)) { self.toast = nil }
+                if undoAction?.id == toast.id { undoAction = nil }
             }
         }
     }

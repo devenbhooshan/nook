@@ -76,7 +76,7 @@ public enum GoogleOAuth {
 
         let pkce = PKCE()
         let state = PKCE.randomString(length: 32)
-        let server = LoopbackServer()
+        let server = LoopbackServer(expectedState: state)
         let port = try await server.start()
         defer { server.stop() }
 

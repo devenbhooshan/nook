@@ -338,6 +338,12 @@ public final class MailRepository: @unchecked Sendable {
         return ordered
     }
 
+    /// One conversation by id, wherever it is (including trash), or nil if it isn't stored.
+    public func thread(account: String, threadId: String) -> ThreadSummary? {
+        let key = ThreadKey(account: account, threadId: threadId)
+        return summaries(for: [key], mailbox: .all).first ?? summaries(for: [key], mailbox: .trash).first
+    }
+
     /// Search: full-text and operator matches at the message level, grouped into conversations.
     private func searchThreads(_ query: ThreadQuery) -> [ThreadSummary] {
         guard let search = query.search else { return [] }
@@ -491,9 +497,17 @@ public final class MailRepository: @unchecked Sendable {
         }
     }
 
-    /// Replaces the tag list. Tags that were renamed or removed lose their assignments.
-    public func saveTags(_ tags: [Tag]) throws {
+    /// Replaces the tag list. `renames` maps old names to new ones, so renamed tags keep their assignments
+    /// (including ones you applied by hand). Tags that were removed lose theirs.
+    public func saveTags(_ tags: [Tag], renames: [String: String] = [:]) throws {
         try db.transaction {
+            for (old, new) in renames where old != new {
+                try db.execute(
+                    "INSERT OR IGNORE INTO message_tags(account, message_id, tag, source) SELECT account, message_id, ?, source FROM message_tags WHERE tag = ?",
+                    [new, old]
+                )
+                try db.execute("DELETE FROM message_tags WHERE tag = ?", [old])
+            }
             try db.execute("DELETE FROM tags")
             for (position, tag) in tags.enumerated() {
                 try db.execute(

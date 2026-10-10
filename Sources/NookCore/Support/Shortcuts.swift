@@ -39,6 +39,15 @@ public struct ShortcutInterpreter: Sendable {
 
     public var isAwaitingSequence: Bool { pendingGoSince != nil }
 
+    /// The characters a key press should be matched on, or nil if it isn't a shortcut.
+    ///
+    /// Uses the characters without modifiers (so Caps Lock doesn't turn "u" into "U", which means something else),
+    /// except where a layout needs Option to type a shortcut character: "#" is Option-3 on a UK keyboard.
+    public static func shortcutCharacters(characters: String?, ignoringModifiers: String?, option: Bool) -> String? {
+        if option { return characters == "#" ? "#" : nil }
+        return ignoringModifiers ?? characters
+    }
+
     /// - Parameters:
     ///   - characters: The typed characters, ignoring modifiers except Shift (so Shift-3 is "#").
     ///   - keyCode: The hardware key code, for keys without characters.

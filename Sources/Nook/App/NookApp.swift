@@ -11,6 +11,8 @@ struct NookApp: App {
         Window("Nook", id: "main") {
             RootView()
                 .environmentObject(store)
+                // Demo mode keeps its settings in a separate suite, so it never changes your real ones.
+                .defaultAppStorage(store.defaults)
                 .frame(minWidth: 860, minHeight: 540)
         }
         .windowStyle(.hiddenTitleBar)
@@ -21,6 +23,8 @@ struct NookApp: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                // Demo mode keeps its settings in a separate suite, so it never changes your real ones.
+                .defaultAppStorage(store.defaults)
         }
     }
 }
