@@ -5,8 +5,8 @@ import Testing
 /// Every switch and action must feel instant. These run on a mailbox far bigger than any test fixture, against
 /// a real file (as the app uses), and fail if a user-facing operation exceeds its budget.
 ///
-/// The budget is 100 ms end to end, so each database step here gets a fraction of it. Debug builds are slower
-/// than release, which keeps these limits on the safe side.
+/// The budget is 100 ms end to end, so each database step here gets a fraction of it. `scripts/test.sh` runs this
+/// suite on its own, in a release build, which is what people actually run.
 @Suite("Performance", .serialized)
 struct PerformanceTests {
     static let messages = 10_000
