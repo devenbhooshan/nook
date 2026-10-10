@@ -11,7 +11,12 @@ import Testing
 struct PerformanceTests {
     static let messages = 10_000
     static let threads = 4_000
-    static let budget: Duration = .milliseconds(25)
+
+    /// Shared CI machines (GitHub's macOS runners) run this workload about 2.5x slower than a recent Mac.
+    /// The budgets are about people's Macs, so CI gets a 2x allowance: still tight enough to catch a regression
+    /// like the multi-second tab switch these tests were written for.
+    static let machineAllowance: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 2
+    static let budget: Duration = .milliseconds(25 * machineAllowance)
 
     /// Built once for the suite: a store with two accounts, tags, and a realistic mix of read/unread/archived mail.
     static let fixture: (repo: MailRepository, url: URL) = {
@@ -84,7 +89,7 @@ struct PerformanceTests {
 
     /// Search has to look at every match, so it gets its own, still well-inside-100 ms, budget.
     /// "invoice" is the worst case here: it appears in every one of the 10,000 messages.
-    static let searchBudget: Duration = .milliseconds(60)
+    static let searchBudget: Duration = .milliseconds(60 * machineAllowance)
 
     @Test func searchIsInstant() {
         #expect(measure { _ = repo.threads(ThreadQuery(search: SearchQuery.parse("invoice"), limit: 100)) } < Self.searchBudget)
@@ -126,6 +131,6 @@ struct PerformanceTests {
             }
             try repo.upsert(batch)
         }
-        #expect(elapsed < .milliseconds(50), "20-message batch took \(elapsed)")
+        #expect(elapsed < .milliseconds(50 * Self.machineAllowance), "20-message batch took \(elapsed)")
     }
 }
