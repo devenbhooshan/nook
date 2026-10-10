@@ -1,22 +1,78 @@
 import NookCore
+import ServiceManagement
 import SwiftUI
 
+enum SettingsTab: String {
+    case general, accounts, tags, intelligence, integrations, privacy
+    static let storageKey = "settings.tab"
+}
+
 struct SettingsView: View {
+    @AppStorage(SettingsTab.storageKey) private var tab = SettingsTab.general.rawValue
+
     var body: some View {
-        TabView {
+        TabView(selection: $tab) {
+            GeneralSettings()
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general.rawValue)
             AccountsSettings()
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
+                .tag(SettingsTab.accounts.rawValue)
             TagsSettings()
                 .tabItem { Label("Tags", systemImage: "tag") }
+                .tag(SettingsTab.tags.rawValue)
             IntelligenceSettings()
                 .tabItem { Label("Intelligence", systemImage: "sparkles") }
+                .tag(SettingsTab.intelligence.rawValue)
             IntegrationsSettings()
                 .tabItem { Label("Integrations", systemImage: "puzzlepiece.extension") }
+                .tag(SettingsTab.integrations.rawValue)
             PrivacySettings()
                 .tabItem { Label("Privacy", systemImage: "hand.raised") }
+                .tag(SettingsTab.privacy.rawValue)
         }
         .frame(width: 580, height: 480)
         .tint(Theme.accent)
+    }
+}
+
+private struct GeneralSettings: View {
+    @EnvironmentObject private var store: AppStore
+    @AppStorage(AppStore.dockBadgeKey) private var dockBadge = true
+    @State private var openAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var loginItemNote: String?
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Open Nook at login", isOn: $openAtLogin)
+                    .onChange(of: openAtLogin) { _, enabled in setOpenAtLogin(enabled) }
+                if let loginItemNote {
+                    Text(loginItemNote).font(.caption).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text("Nook syncs whenever it's running, including with its window closed. Click the Dock icon to bring the window back, and press ⌘Q to quit.")
+            }
+            Section {
+                Toggle("Show unread count on the Dock icon", isOn: $dockBadge)
+                    .onChange(of: dockBadge) { store.updateDockBadge() }
+            } footer: {
+                Text("Counts unread conversations in your inboxes, across all accounts.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func setOpenAtLogin(_ enabled: Bool) {
+        do {
+            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            loginItemNote = SMAppService.mainApp.status == .requiresApproval
+                ? "Allow Nook in System Settings → General → Login Items to finish."
+                : nil
+        } catch {
+            loginItemNote = error.localizedDescription
+            openAtLogin = SMAppService.mainApp.status == .enabled
+        }
     }
 }
 

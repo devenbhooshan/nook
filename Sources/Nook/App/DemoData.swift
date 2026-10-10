@@ -41,6 +41,10 @@ enum DemoData {
 
     /// `--windowed` (any mode) leaves full screen, so screenshots of the window work.
     static func applyWindowOptions(to window: NSWindow) {
+        if CommandLine.arguments.contains("--demo"), CommandLine.arguments.contains("--close-window") {
+            // Closes the window shortly after launch, to check the app keeps running without it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { window.performClose(nil) }
+        }
         guard CommandLine.arguments.contains("--windowed") else { return }
         if window.styleMask.contains(.fullScreen) { window.toggleFullScreen(nil) }
         window.setContentSize(NSSize(width: 1140, height: 720))

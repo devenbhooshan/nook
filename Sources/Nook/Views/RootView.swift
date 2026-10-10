@@ -4,6 +4,7 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -66,6 +67,7 @@ struct RootView: View {
         .tint(Theme.accent)
         .onAppear {
             store.openSettingsHandler = { openSettings() }
+            store.openMainWindowHandler = { openWindow(id: "main") }
             store.start()
         }
         .onOpenURL { store.handle($0) }

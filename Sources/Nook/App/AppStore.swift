@@ -172,6 +172,7 @@ final class AppStore: ObservableObject {
     func start() {
         guard !started else { return }
         started = true
+        Self.current = self
         loadAccounts()
         tags = repo.tags()
         reload()
@@ -315,6 +316,7 @@ final class AppStore: ObservableObject {
         }
 
         unreadCounts = repo.unreadInboxCounts()
+        updateDockBadge()
         hasStoredMail = !threads.isEmpty || repo.hasMessages()
         splitCounts = repo.splitCounts(account: scope)
         unreadSplitCounts = repo.splitCounts(account: scope, unreadOnly: true)
@@ -553,10 +555,33 @@ final class AppStore: ObservableObject {
     /// Set by the root view from SwiftUI's `openSettings` action. The old AppKit selector
     /// (`showSettingsWindow:`) no longer opens SwiftUI Settings windows on current macOS.
     var openSettingsHandler: (() -> Void)?
+    /// Set by the root view from SwiftUI's `openWindow` action, so the Dock icon can reopen a closed window.
+    var openMainWindowHandler: (() -> Void)?
 
-    func openSettings() {
+    /// The running app's store, for AppKit callbacks that can't reach SwiftUI state.
+    static weak var current: AppStore?
+    /// Opens Settings, optionally on a specific tab.
+    func openSettings(tab: SettingsTab? = nil) {
+        if let tab { UserDefaults.standard.set(tab.rawValue, forKey: SettingsTab.storageKey) }
         openSettingsHandler?()
         NSApp.activate()
+    }
+
+    func showMainWindow() {
+        openMainWindowHandler?()
+        NSApp.activate()
+    }
+
+    // MARK: Dock badge
+
+    static let dockBadgeKey = "ui.dockBadge"
+
+    /// Unread inbox conversations across all accounts, on the Dock icon. Optional, in Settings → General.
+    func updateDockBadge() {
+        let showBadge = UserDefaults.standard.object(forKey: Self.dockBadgeKey) as? Bool ?? true
+        let unread = unreadCounts.values.reduce(0, +)
+        let label = showBadge && unread > 0 ? (unread > 999 ? "999+" : "\(unread)") : nil
+        if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
     }
 
     func account(for email: String) -> Account? {

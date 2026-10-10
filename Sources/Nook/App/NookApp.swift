@@ -26,10 +26,31 @@ struct NookApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Held for the life of the app so App Nap doesn't stall the sync timer while the window is hidden.
+    private var syncActivity: NSObjectProtocol?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Lets `swift run` behave like a normal app with a Dock icon and menu bar.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        syncActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Keeping mail in sync"
+        )
+    }
+
+    /// A mail app keeps syncing with its window closed. Quit with ⌘Q.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// Clicking the Dock icon with no window open brings the inbox back. SwiftUI doesn't reopen a closed
+    /// `Window` scene on its own, so ask it to through the `openWindow` action the root view handed over.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if !hasVisibleWindows {
+            MainActor.assumeIsolated { AppStore.current?.showMainWindow() }
+        }
+        return true
     }
 }
 

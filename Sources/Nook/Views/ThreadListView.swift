@@ -364,7 +364,7 @@ private struct SignedOutNotice: View {
                     .font(.system(size: 12.5))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Sign in again…") { store.openSettings() }
+                Button("Sign in again…") { store.openSettings(tab: .accounts) }
                     .buttonStyle(.textLink)
                     .font(.system(size: 12.5, weight: .medium))
             }

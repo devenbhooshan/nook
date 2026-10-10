@@ -192,6 +192,8 @@ Tests/
   NookCoreTests/   Swift Testing suites, with fakes for Gmail and HTTP
 ```
 
+**Syncing in the background.** Nook syncs whenever it's running, whether or not it's in front, and keeps running when you close its window (click the Dock icon to bring it back; ⌘Q quits). It holds an activity assertion so App Nap doesn't delay the 30-second sync while it's hidden. Turn on **Settings → General → Open Nook at login** so it starts with your Mac. The Dock icon can show your unread inbox count (also in General).
+
 **How sync works.** The first sync downloads your inbox plus the last 60 days of mail and stores Gmail's `historyId`. Every 30 seconds after that, and whenever the app becomes active, Nook asks Gmail only for the history since that cursor and applies new messages, deletions and label changes. If the cursor expires, Nook falls back to a full resync that refreshes labels without downloading bodies again. Actions such as archive, star and read are applied locally first, so the UI never waits on the network, then sent to Gmail. If a Gmail call fails, Nook resyncs.
 
 **How it stays fast.** Every switch and action has a 100 ms budget, enforced by `PerformanceTests` on a 10,000-message mailbox. Lists and counts read a small per-conversation index (`threads`, `thread_tags`) that's updated on every write, instead of scanning messages. Message bodies live in their own table and are read only when you open a conversation. The list loads 100 conversations at a time. The UI reads through a separate read-only SQLite connection, so a running sync never blocks it.
