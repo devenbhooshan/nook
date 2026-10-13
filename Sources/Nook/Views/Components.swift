@@ -199,6 +199,21 @@ struct WindowReader: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
+/// Finds the `NSScrollView` a SwiftUI `ScrollView` is built on. Place it inside the scroll view's content.
+struct EnclosingScrollViewReader: NSViewRepresentable {
+    let onScrollView: (NSScrollView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let scrollView = view.enclosingScrollView { onScrollView(scrollView) }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
 /// The window's top row. Nook hides the system toolbar, so this leaves room for the traffic lights
 /// when the sidebar is hidden, and carries the sidebar toggle.
 struct TopBar<Leading: View, Trailing: View>: View {

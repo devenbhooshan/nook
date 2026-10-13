@@ -116,6 +116,8 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 
 Go-to sequences: `g i` inbox, `g s` starred, `g t` sent, `g a` all mail, `g #` trash.
 
+In an open conversation, `↑` / `↓` scroll it, `space` / `⇧space` and Page Up / Page Down move a page, and Home / End jump to the top or bottom. Swipe right with two fingers on a trackpad (or one on a Magic Mouse) to go back to the list; this follows **Swipe between pages** in System Settings.
+
 ## Search
 
 Search covers every message stored locally, with full-text prefix matching. It also understands Gmail-style operators:
@@ -243,7 +245,7 @@ No identity or credentials live in the repository. Forks sign with their own (`N
 
 `scripts/test.sh` adds the framework paths Swift Testing needs when only the Command Line Tools are installed. With Xcode, plain `swift test` works too.
 
-Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`.
+Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`. To check input handling, `--keys down,space,end,j,…` presses keys and `--swipe` swipes back; both print what is open and how far it is scrolled.
 
 To try the MCP server against a scratch store in a debug build: `NOOK_MCP_ENABLED=1 swift run nook-mcp --database /tmp/nook.sqlite` (or set `NOOK_DATABASE`). Release builds ignore `NOOK_MCP_ENABLED` and only honor the switch in Settings.
 

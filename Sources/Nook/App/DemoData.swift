@@ -14,7 +14,55 @@ enum DemoData {
     /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply,
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [tagging]` shows a later onboarding step,
-    /// and `--dark` forces dark mode. Used for screenshots.
+    /// `--keys down,space,…` presses keys once the window is up, `--swipe` swipes back,
+    /// and `--dark` forces dark mode. Used for screenshots and for checking input handling.
+    /// Queues real key events, so they go through the same monitors as typing.
+    private static func pressKeys(_ keys: [String], in store: AppStore) {
+        guard let window = store.mainWindow else { return }
+        let codes: [String: (UInt16, String)] = [
+            "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "space": (49, " "),
+            "pagedown": (121, "\u{F72D}"), "pageup": (116, "\u{F72C}"), "home": (115, "\u{F729}"), "end": (119, "\u{F72B}"),
+            "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
+        ]
+        for key in keys {
+            guard let (code, characters) = codes[key] else { continue }
+            for down in [true, false] {
+                guard let event = NSEvent.keyEvent(
+                    with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                    isARepeat: false, keyCode: code
+                ) else { continue }
+                NSApp.postEvent(event, atStart: false)
+            }
+        }
+    }
+
+    /// Prints what's open and how far it's scrolled, so input handling can be checked without a screenshot.
+    private static func reportReader(_ store: AppStore) {
+        let offset = store.readerScrollView.map { Int($0.contentView.bounds.origin.y) }.map(String.init) ?? "none"
+        print("demo: open=\(store.openThread?.subject ?? "none") scroll=\(offset)")
+        fflush(stdout)
+    }
+
+    /// Queues a two-finger swipe to the right over the window, as a trackpad sends it.
+    private static func swipeBack(in store: AppStore) {
+        guard let window = store.mainWindow, let screen = window.screen else { return }
+        // CGEvent locations are measured from the top of the main screen.
+        let center = CGPoint(x: window.frame.midX, y: screen.frame.maxY - window.frame.midY)
+        // Fingers moving right without natural scrolling, which reports negative deltas.
+        let phases: [(phase: Int64, dx: Int32)] = [(1, 0), (2, -30), (2, -40), (2, -50), (4, 0)]
+        for step in phases {
+            guard let cgEvent = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: 0, wheel2: step.dx, wheel3: 0) else { continue }
+            cgEvent.location = center
+            cgEvent.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            cgEvent.setIntegerValueField(.scrollWheelEventScrollPhase, value: step.phase)
+            cgEvent.setIntegerValueField(.scrollWheelEventPointDeltaAxis2, value: Int64(step.dx))
+            cgEvent.setIntegerValueField(.mouseEventWindowUnderMousePointer, value: Int64(window.windowNumber))
+            cgEvent.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window.windowNumber))
+            if let event = NSEvent(cgEvent: cgEvent) { NSApp.postEvent(event, atStart: false) }
+        }
+    }
+
     static func applyLaunchOptions(to store: AppStore) {
         let arguments = CommandLine.arguments
         guard arguments.contains("--demo") else { return }
@@ -32,6 +80,15 @@ enum DemoData {
         }
         if let flag = arguments.firstIndex(of: "--split"), arguments.indices.contains(flag + 1) {
             store.setSplit(.tag(arguments[flag + 1]))
+        }
+        if let flag = arguments.firstIndex(of: "--keys"), arguments.indices.contains(flag + 1) {
+            let keys = arguments[flag + 1].split(separator: ",").map(String.init)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { pressKeys(keys, in: store) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
+        }
+        if arguments.contains("--swipe") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { swipeBack(in: store) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
         }
         if let flag = arguments.firstIndex(of: "--onboarding") {
             let step = arguments.indices.contains(flag + 1) && arguments[flag + 1] == "tagging" ? OnboardingStep.setUpTagging : .connectAssistant
@@ -94,7 +151,7 @@ enum DemoData {
             message("w2", work, from: ("GitHub", "notifications@github.example"), subject: "[acme/nook] PR #482: Speed up incremental sync",
                     body: "jordan-lee requested your review on this pull request. 4 files changed, +212 −87.", hoursAgo: 4, unread: true, tags: ["Notification"]),
             message("p3", personal, from: ("The Margin", "hello@themargin.example"), subject: "Issue 112: Why local-first software is having a moment",
-                    body: "This week: CRDTs in production, a field guide to sync engines, and why your data should outlive the apps you use.", hoursAgo: 7, tags: ["Newsletter"]),
+                    body: themarginIssue, hoursAgo: 7, tags: ["Newsletter"]),
             message("w3", work, from: ("Jordan Lee", "jordan@acme.example"), subject: "1:1 moved to 3pm",
                     body: "Conflict with the board prep — moved our 1:1 to 3pm. Same link.", hoursAgo: 9, tags: ["Calendar"]),
             message("p4", personal, from: ("First Harbor Bank", "alerts@firstharbor.example"), subject: "Your September statement is ready",
@@ -128,3 +185,41 @@ struct OfflineGmail: GmailService {
     func untrashThread(id: String) async throws {}
     func send(raw: String, threadId: String?) async throws {}
 }
+
+/// A full-length newsletter, so the demo has a conversation long enough to scroll.
+private let themarginIssue = """
+This week: CRDTs in production, a field guide to sync engines, and why your data should outlive the apps you use.
+
+1. CRDTs grow up
+
+Five years ago, conflict-free replicated data types were a conference-talk curiosity. This year three of the editors you probably use every day quietly switched to them. The pitch hasn't changed: every device keeps a full copy, edits merge without a server deciding who wins, and going offline is just a long pause between syncs.
+
+What changed is the engineering. Compact encodings cut document history by an order of magnitude, and garbage collection finally works without breaking peers that were offline for a month. If you dismissed CRDTs as too heavy in 2021, it's worth another look.
+
+2. A field guide to sync engines
+
+Most apps that feel instant share a pattern: write locally first, show the change immediately, and reconcile with the server in the background. The hard parts are the edges. What happens when the server rejects a change you already showed? When two devices rename the same folder? When a phone comes back after six weeks in a drawer?
+
+We talked to four teams who have shipped sync engines and asked what they would do differently. The common answer: keep a log of operations, not just the latest state, and make every operation safe to apply twice.
+
+3. Your data should outlive your apps
+
+The best test of a tool is what happens when you stop using it. Can you take your notes, mail and photos with you, in a format something else can read? Local-first software makes that the default: the files are on your disk, and the app is a lens over them.
+
+That doesn't mean giving up the cloud. It means the cloud becomes a convenience for backup and sharing, rather than the only place your work exists.
+
+4. Reading list
+
+- An interview with the team behind a local-first spreadsheet that syncs over plain files.
+- A gentle introduction to vector clocks, with diagrams.
+- Why SQLite keeps turning up as an application file format.
+- A case study on migrating two million users from a server-first data model.
+
+5. From the inbox
+
+Last week we asked how you back up your mail. Most of you said "I don't," and a few of you said "I export it once a year and hope." One reader keeps a nightly encrypted copy on a USB drive taped inside their desk. We admire the commitment.
+
+That's it for this week. Reply to this email with what you're building; we read every one.
+
+The Margin
+"""

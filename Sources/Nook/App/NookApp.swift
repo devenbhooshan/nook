@@ -18,6 +18,9 @@ struct NookApp: App {
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
         .defaultSize(width: 1140, height: 720)
+        // Always open the inbox at launch. Otherwise quitting with the window closed brings Nook back with
+        // no window, and nothing for the Dock icon to reopen.
+        .restorationBehavior(.disabled)
         .commands { NookCommands(store: store) }
 
         Settings {
@@ -41,6 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "Keeping mail in sync"
         )
+        // The window normally starts the store when it appears. If it hasn't appeared after a moment, start syncing
+        // anyway: a mail app has to sync with no window open. (Starting before the window exists stops SwiftUI showing it.)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { AppStore.current?.start() }
     }
 
     /// A mail app keeps syncing with its window closed. Quit with ⌘Q.

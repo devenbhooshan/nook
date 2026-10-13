@@ -92,6 +92,8 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var isFullScreen = false
     private(set) weak var mainWindow: NSWindow?
+    /// The open conversation's scroll view, so the keyboard can scroll it.
+    weak var readerScrollView: NSScrollView?
 
     /// Remembers the main window and tracks full screen, where the traffic lights are hidden.
     func attach(to window: NSWindow) {
@@ -173,6 +175,13 @@ final class AppStore: ObservableObject {
     }
 
     static func live() -> AppStore {
+        let store = makeLive()
+        // The app delegate starts it, so sync runs even if the app launches without its window.
+        current = store
+        return store
+    }
+
+    private static func makeLive() -> AppStore {
         if CommandLine.arguments.contains("--demo") { return DemoData.store() }
         LegacySettings.migrateIfNeeded()
         do {

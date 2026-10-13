@@ -120,7 +120,8 @@ public struct ShortcutInterpreter: Sendable {
         Section(title: "Navigate", entries: [
             Entry(keys: "j / k", title: "Next / previous conversation"),
             Entry(keys: "↵", title: "Open conversation"),
-            Entry(keys: "esc", title: "Back to list"),
+            Entry(keys: "esc", title: "Back to list (or swipe right)"),
+            Entry(keys: "↑ / ↓", title: "Scroll a conversation (space for a page)"),
             Entry(keys: "tab", title: "Next split (⇧ for previous)"),
             Entry(keys: "⇧U", title: "Show only unread"),
             Entry(keys: "/", title: "Search"),

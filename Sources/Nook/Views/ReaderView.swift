@@ -27,6 +27,7 @@ struct ReaderView: View {
                     }
                     replyBar
                 }
+                .background(EnclosingScrollViewReader { store.readerScrollView = $0 })
                 .frame(maxWidth: Theme.readerWidth)
                 .padding(.horizontal, 32)
                 .padding(.top, 8)
