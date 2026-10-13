@@ -37,6 +37,9 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var accounts: [Account] = []
     @Published private(set) var tags: [Tag] = []
+    @Published var rules: [MailRule] = []
+    /// A rule being created from the main window, for example from an open email.
+    @Published var ruleDraft: MailRule?
     @Published private(set) var threads: [ThreadSummary] = []
     @Published private(set) var unreadCounts: [String: Int] = [:]
     @Published private(set) var splitCounts = SplitCounts()
@@ -112,7 +115,7 @@ final class AppStore: ObservableObject {
 
     let repo: MailRepository
     let secrets: SecretStore
-    private let sync: SyncEngine
+    let sync: SyncEngine
     private let tagger: Tagger
     let isDemo: Bool
     private var sendingDrafts: Set<UUID> = []
@@ -205,6 +208,7 @@ final class AppStore: ObservableObject {
         Self.current = self
         loadAccounts()
         tags = repo.tags()
+        rules = repo.rules()
         reload()
 
         $searchText
@@ -912,6 +916,9 @@ final class AppStore: ObservableObject {
                     DispatchQueue.main.async { self?.openPalette(.tags) }
                 },
                 PaletteCommand(title: "Move to Trash", section: "Conversation", systemImage: "trash", shortcut: "#") { [weak self] in self?.trash() },
+                PaletteCommand(title: "Create rule from this email…", section: "Conversation", systemImage: "line.3.horizontal.decrease.circle", shortcut: nil) { [weak self] in
+                    self?.createRuleFromCurrentThread()
+                },
             ]
         }
         commands += [

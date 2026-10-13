@@ -7,6 +7,12 @@ struct NookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = AppStore.live()
 
+    init() {
+        // Command-line values like the "3" in `--open 3` would otherwise be treated as files to open, and an app
+        // launched to open files doesn't show its window.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
+    }
+
     var body: some Scene {
         Window("Nook", id: "main") {
             RootView()

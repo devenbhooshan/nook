@@ -3,7 +3,7 @@ import ServiceManagement
 import SwiftUI
 
 enum SettingsTab: String {
-    case general, accounts, tags, intelligence, integrations, privacy
+    case general, accounts, tags, rules, intelligence, integrations, privacy
     static let storageKey = "settings.tab"
 }
 
@@ -21,6 +21,9 @@ struct SettingsView: View {
             TagsSettings()
                 .tabItem { Label("Tags", systemImage: "tag") }
                 .tag(SettingsTab.tags.rawValue)
+            RulesSettings()
+                .tabItem { Label("Rules", systemImage: "line.3.horizontal.decrease.circle") }
+                .tag(SettingsTab.rules.rawValue)
             IntelligenceSettings()
                 .tabItem { Label("Intelligence", systemImage: "sparkles") }
                 .tag(SettingsTab.intelligence.rawValue)
@@ -31,7 +34,7 @@ struct SettingsView: View {
                 .tabItem { Label("Privacy", systemImage: "hand.raised") }
                 .tag(SettingsTab.privacy.rawValue)
         }
-        .frame(width: 580, height: 480)
+        .frame(width: 620, height: 620)
         .tint(Theme.accent)
     }
 }

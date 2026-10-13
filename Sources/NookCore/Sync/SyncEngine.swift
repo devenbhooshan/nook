@@ -268,14 +268,81 @@ public actor SyncEngine {
             // The account may have been removed while this batch downloaded.
             try Task.checkCancellation()
             guard repo.account(account) != nil else { throw CancellationError() }
-            let messages = fetched
+            var messages = fetched
                 .filter { Self.shouldStore(labels: $0.labelIds ?? []) }
                 .map { MIMEParser.message(from: $0, account: account) }
+            let tags = try await applyRules(to: &messages, account: account, service: service)
             try repo.upsert(messages)
+            for (id, ruleTags) in tags { try repo.addRuleTags(ruleTags, account: account, messageId: id) }
             stored += messages.count
             onChange()
         }
         return stored
+    }
+
+    // MARK: Rules
+
+    /// Runs your rules on newly downloaded mail before it's stored, so a rule's changes never flash in the inbox.
+    /// Label changes go to Gmail first, in one request per kind of change; if Gmail refuses, the mail is stored as
+    /// it arrived. Returns the tags to add, by message id.
+    private func applyRules(to messages: inout [MailMessage], account: String, service: GmailService) async throws -> [String: [String]] {
+        let rules = repo.rules().filter(\.isEnabled)
+        guard !rules.isEmpty else { return [:] }
+        var tags: [String: [String]] = [:]
+        var outcomes: [Int: RuleOutcome] = [:]
+        for (index, message) in messages.enumerated() {
+            let outcome = RuleOutcome.evaluate(message, rules: rules, onlyArrivedAfterCreation: true)
+            if !outcome.tags.isEmpty { tags[message.id] = outcome.tags }
+            if !outcome.addLabels.isEmpty || !outcome.removeLabels.isEmpty { outcomes[index] = outcome }
+        }
+        for (change, indices) in Dictionary(grouping: outcomes.keys, by: { LabelChange(outcomes[$0]!) }) {
+            do {
+                try await service.modifyMessages(ids: indices.map { messages[$0].id }, add: change.add, remove: change.remove)
+                for index in indices { messages[index].labels = outcomes[index]!.labels(for: messages[index]) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Leave these as they arrived; the mail is still there to deal with by hand.
+            }
+        }
+        return tags
+    }
+
+    /// Applies one rule to mail already in Nook, for when you create a rule and want it to tidy up what's there.
+    /// - Returns: How many emails it changed.
+    @discardableResult
+    public func apply(_ rule: MailRule, searchLimit: Int = 5000) async throws -> Int {
+        var rule = rule
+        rule.isEnabled = true
+        let matches = repo.recentReceivedMessages(limit: searchLimit).filter(rule.matches)
+        var changed = 0
+        for (account, messages) in Dictionary(grouping: matches, by: \.account) {
+            let service = try service(for: account)
+            let outcomes = messages.map { ($0, RuleOutcome.evaluate($0, rules: [rule], onlyArrivedAfterCreation: false)) }
+                .filter { !$0.1.isEmpty }
+            for (change, group) in Dictionary(grouping: outcomes.filter { !$0.1.addLabels.isEmpty || !$0.1.removeLabels.isEmpty },
+                                              by: { LabelChange($0.1) }) {
+                try await service.modifyMessages(ids: group.map(\.0.id), add: change.add, remove: change.remove)
+                for (message, outcome) in group {
+                    try repo.setLabels(outcome.labels(for: message), account: account, messageId: message.id)
+                }
+            }
+            for (message, outcome) in outcomes where !outcome.tags.isEmpty {
+                try repo.addRuleTags(outcome.tags, account: account, messageId: message.id)
+            }
+            changed += outcomes.count
+        }
+        if changed > 0 { onChange() }
+        return changed
+    }
+
+    private struct LabelChange: Hashable {
+        var add: [String]
+        var remove: [String]
+        init(_ outcome: RuleOutcome) {
+            add = outcome.addLabels.sorted()
+            remove = outcome.removeLabels.sorted()
+        }
     }
 
     private func refreshLabels(_ ids: [String], account: String, service: GmailService) async throws -> Int {

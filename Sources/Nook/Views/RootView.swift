@@ -63,6 +63,9 @@ struct RootView: View {
         .sheet(item: $store.draft) { draft in
             ComposeView(draft: draft)
         }
+        .sheet(item: $store.ruleDraft) { rule in
+            RuleEditor(rule: rule, isNew: true)
+        }
         .background(WindowReader { store.attach(to: $0) })
         .tint(Theme.accent)
         .onAppear {

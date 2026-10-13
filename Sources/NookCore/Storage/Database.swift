@@ -219,7 +219,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 6
+    static let version = 7
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -248,6 +248,16 @@ enum Schema {
                 if try !hasColumn(db, table: "accounts", column: "pending_history_id") {
                     try db.run("ALTER TABLE accounts ADD COLUMN pending_history_id TEXT")
                 }
+            }),
+            (7, {
+                // Rules you set up. Conditions and actions are stored as JSON, so new kinds don't need a migration.
+                try db.run("""
+                CREATE TABLE IF NOT EXISTS rules(
+                    id TEXT PRIMARY KEY,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    definition TEXT NOT NULL
+                );
+                """)
             }),
         ]
         for (number, step) in steps where current < number {

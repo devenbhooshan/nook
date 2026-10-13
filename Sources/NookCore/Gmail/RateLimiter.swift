@@ -53,6 +53,7 @@ enum GmailQuota {
         case (_, "profile"): 1
         case (_, "history"): 2
         case ("POST", "messages/send"): 100
+        case ("POST", "messages/batchModify"): 50
         case ("POST", let p) where p.hasPrefix("threads/"): 10
         default: 5
         }
