@@ -74,6 +74,9 @@ final class AppStore: ObservableObject {
     @Published var paletteMode: PaletteMode = .everything
     @Published var showHelp = false
     @Published var draft: Draft?
+    /// Recipient suggestions for the To and Cc fields. Rebuilt in the background each time a message is started.
+    @Published private(set) var contactBook = ContactBook()
+    private var contactsLoading = false
     @Published var showSidebar = false {
         didSet { defaults.set(showSidebar, forKey: "ui.showSidebar") }
     }
@@ -806,6 +809,23 @@ final class AppStore: ObservableObject {
             return
         }
         draft = new
+        refreshContacts()
+    }
+
+    private func refreshContacts() {
+        guard !contactsLoading else { return }
+        contactsLoading = true
+        let repo = repo
+        let own = Set(accounts.map(\.email))
+        let useAddressBook = !isDemo
+        Task {
+            let addressBook = useAddressBook ? await AddressBook.entries() : []
+            let book = await Task.detached(priority: .userInitiated) {
+                ContactBook(history: repo.contactHistory(), addressBook: addressBook, own: own)
+            }.value
+            contactBook = book
+            contactsLoading = false
+        }
     }
 
     func compose() {

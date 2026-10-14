@@ -76,7 +76,7 @@ bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/In
 # loads libraries signed by the same team, so the framework is re-signed with our identity.
 codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app/Contents/Frameworks/SQLCipher.framework" >/dev/null
 codesign --force ${signing[@]+"${signing[@]}"} --identifier "$bundle_id" --sign "$identity" "$app/Contents/MacOS/nook-mcp" >/dev/null
-codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app" >/dev/null
+codesign --force ${signing[@]+"${signing[@]}"} --entitlements Resources/Nook.entitlements --sign "$identity" "$app" >/dev/null
 
 if [[ "$identity" == "-" ]]; then
     echo "Built $app (ad hoc: macOS may ask for Keychain access after each rebuild; run scripts/setup-signing.sh once to stop that)"

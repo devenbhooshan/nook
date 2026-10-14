@@ -126,6 +126,28 @@ public final class MailRepository: @unchecked Sendable {
         ((try? reader.query("SELECT 1 AS x FROM threads LIMIT 1")) ?? []).isEmpty == false
     }
 
+    /// Who has written to you and whom you've written to, for recipient suggestions.
+    public func contactHistory() -> ContactHistory {
+        // With a single MAX(), SQLite takes the bare from_name from the newest message: the sender's latest name.
+        let senders = (try? reader.query("""
+            SELECT from_name, from_email, COUNT(*) AS n, MAX(date) AS last FROM messages
+            WHERE from_email != '' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,SENT,%'
+            GROUP BY lower(from_email)
+            """)) ?? []
+        let sent = (try? reader.query("SELECT to_addr, cc, date FROM messages WHERE labels LIKE '%,SENT,%'")) ?? []
+        return ContactHistory(
+            senders: senders.map {
+                ContactHistory.Sender(
+                    name: $0.string("from_name"), email: $0.string("from_email"), count: $0.int("n"),
+                    lastDate: Date(timeIntervalSince1970: $0.double("last"))
+                )
+            },
+            sent: sent.map {
+                ContactHistory.Sent(to: $0.string("to_addr"), cc: $0.string("cc"), date: Date(timeIntervalSince1970: $0.double("date")))
+            }
+        )
+    }
+
     public func messageIds(account: String) -> Set<String> {
         let rows = (try? reader.query("SELECT id FROM messages WHERE account = ?", [account])) ?? []
         return Set(rows.map { $0.string("id") })

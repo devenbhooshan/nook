@@ -10,6 +10,7 @@ struct ComposeView: View {
     /// What the draft looked like when it opened, to tell whether discarding would lose anything.
     private let original: Draft
     @FocusState private var focus: Field?
+    @StateObject private var suggestions = RecipientSuggestions()
 
     private enum Field: Hashable { case to, cc, subject, body }
 
@@ -39,7 +40,7 @@ struct ComposeView: View {
             .padding(.top, 16)
             .padding(.bottom, 8)
 
-            field("To", text: $draft.to, focus: .to) {
+            recipientField("To", text: $draft.to, focus: .to) {
                 if !showCc {
                     Button("Cc") { showCc = true; focus = .cc }
                         .buttonStyle(.textLink)
@@ -47,7 +48,7 @@ struct ComposeView: View {
                 }
             }
             if showCc {
-                field("Cc", text: $draft.cc, focus: .cc) { EmptyView() }
+                recipientField("Cc", text: $draft.cc, focus: .cc) { EmptyView() }
             }
             field("Subject", text: $draft.subject, focus: .subject) { EmptyView() }
 
@@ -93,8 +94,14 @@ struct ComposeView: View {
         .frame(width: 660, height: 540)
         .onAppear {
             if draft.from.isEmpty { draft.from = store.accounts.first?.email ?? "" }
-            focus = draft.to.isEmpty ? .to : .body
+            // Start in To until it holds addresses to send to.
+            focus = hasRecipients ? .body : .to
         }
+        .onChange(of: draft.to) { suggest() }
+        .onChange(of: draft.cc) { suggest() }
+        .onChange(of: focus) { suggest() }
+        .onChange(of: store.contactBook) { suggest() }
+        .onDisappear { suggestions.clear() }
     }
 
     private var title: String {
@@ -108,7 +115,36 @@ struct ComposeView: View {
     }
 
     private var canSend: Bool {
-        !draft.from.isEmpty && !Addresses.parseList(draft.to).isEmpty && Addresses.parseList(draft.to).allSatisfy { $0.email.contains("@") }
+        !draft.from.isEmpty && hasRecipients
+    }
+
+    private var hasRecipients: Bool {
+        let recipients = Addresses.parseList(draft.to)
+        return !recipients.isEmpty && recipients.allSatisfy { $0.email.contains("@") }
+    }
+
+    /// Suggests people for the address being typed in To or Cc.
+    private func suggest() {
+        let text: Binding<String>
+        switch focus {
+        case .to: text = $draft.to
+        case .cc: text = $draft.cc
+        default: return suggestions.clear()
+        }
+        suggestions.update(text: text.wrappedValue, book: store.contactBook) { contact in
+            text.wrappedValue = Addresses.complete(text.wrappedValue, with: contact.address)
+        }
+    }
+
+    private func recipientField<Accessory: View>(_ label: String, text: Binding<String>, focus field: Field, @ViewBuilder accessory: () -> Accessory) -> some View {
+        self.field(label, text: text, focus: field, accessory: accessory)
+            .overlay(alignment: .topLeading) {
+                if focus == field, !suggestions.items.isEmpty {
+                    RecipientSuggestionList(suggestions: suggestions)
+                        .offset(x: 82, y: 34)
+                }
+            }
+            .zIndex(focus == field ? 1 : 0)
     }
 
     private func field<Accessory: View>(_ label: String, text: Binding<String>, focus field: Field, @ViewBuilder accessory: () -> Accessory) -> some View {

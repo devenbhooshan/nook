@@ -98,6 +98,13 @@ struct PerformanceTests {
         #expect(measure { _ = repo.threads(ThreadQuery(search: SearchQuery.parse("from:sender42"), limit: 100)) } < Self.searchBudget)
     }
 
+    /// Suggestions are built in the background when a message is started, and have to be ready before the first letter.
+    @Test func recipientSuggestionsAreReadyAtOnce() {
+        #expect(measure { _ = ContactBook(history: repo.contactHistory(), own: ["me@example.com"]) } < Self.searchBudget)
+        let book = ContactBook(history: repo.contactHistory())
+        #expect(measure { _ = book.suggestions(for: "sender 4") } < .milliseconds(5 * Self.machineAllowance))
+    }
+
     @Test func openingAThreadIsInstant() {
         let thread = repo.threads(ThreadQuery(limit: 1))[0]
         #expect(measure { _ = repo.threadMessages(account: thread.account, threadId: thread.threadId) } < Self.budget)

@@ -11,18 +11,20 @@ enum DemoData {
         return AppStore(repo: repo, secrets: MemorySecretStore(), makeService: { _ in OfflineGmail() }, isDemo: true)
     }
 
-    /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply,
+    /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply, `--to <text>` starts a new message with that typed in To,
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [tagging]` shows a later onboarding step,
-    /// `--keys down,space,…` presses keys once the window is up, `--swipe` swipes back,
-    /// and `--dark` forces dark mode. Used for screenshots and for checking input handling.
+    /// `--keys down,space,…` presses keys once the window is up (in the compose sheet, when one is open), `--swipe` swipes back,
+    /// `--snapshot <file.png>` saves the window, even on another Space, and `--dark` forces dark mode. Used for screenshots and for checking input handling.
     /// Queues real key events, so they go through the same monitors as typing.
     private static func pressKeys(_ keys: [String], in store: AppStore) {
-        guard let window = store.mainWindow else { return }
+        guard let main = store.mainWindow else { return }
+        let window = main.attachedSheet ?? main
         let codes: [String: (UInt16, String)] = [
             "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "space": (49, " "),
             "pagedown": (121, "\u{F72D}"), "pageup": (116, "\u{F72C}"), "home": (115, "\u{F729}"), "end": (119, "\u{F72B}"),
             "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
+            "return": (36, "\r"), "tab": (48, "\t"),
         ]
         for key in keys {
             guard let (code, characters) = codes[key] else { continue }
@@ -41,6 +43,16 @@ enum DemoData {
     private static func reportReader(_ store: AppStore) {
         let offset = store.readerScrollView.map { Int($0.contentView.bounds.origin.y) }.map(String.init) ?? "none"
         print("demo: open=\(store.openThread?.subject ?? "none") scroll=\(offset)")
+        fflush(stdout)
+    }
+
+    /// Draws the window (or its sheet) into a PNG. Unlike `screencapture`, this works wherever the window is.
+    private static func snapshot(_ store: AppStore, to path: String) {
+        guard let main = store.mainWindow, let view = (main.attachedSheet ?? main).contentView?.superview,
+              let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        print("demo: snapshot=\(path)")
         fflush(stdout)
     }
 
@@ -72,6 +84,9 @@ enum DemoData {
             store.open(store.threads[index])
         }
         if arguments.contains("--compose") { store.reply(.reply) }
+        if let flag = arguments.firstIndex(of: "--to"), arguments.indices.contains(flag + 1) {
+            store.handle(NookURL.compose(from: nil, to: arguments[flag + 1], cc: "", subject: "", body: "").url)
+        }
         if arguments.contains("--palette") { store.openPalette() }
         if arguments.contains("--unread") { store.toggleUnreadOnly() }
         if arguments.contains("--settings") {
@@ -89,6 +104,10 @@ enum DemoData {
         if arguments.contains("--swipe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { swipeBack(in: store) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
+        }
+        if let flag = arguments.firstIndex(of: "--snapshot"), arguments.indices.contains(flag + 1) {
+            let path = arguments[flag + 1]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { snapshot(store, to: path) }
         }
         if let flag = arguments.firstIndex(of: "--onboarding") {
             let step = arguments.indices.contains(flag + 1) && arguments[flag + 1] == "tagging" ? OnboardingStep.setUpTagging : .connectAssistant

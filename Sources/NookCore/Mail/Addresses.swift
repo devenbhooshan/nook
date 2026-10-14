@@ -56,6 +56,33 @@ public enum Addresses {
             .map(parse)
     }
 
+    /// Splits an address field into what's already entered and the address being typed after the last separator.
+    /// `"Jane <j@x.com>, bo"` gives `("Jane <j@x.com>, ", "bo")`.
+    public static func splitTyping(_ raw: String) -> (entered: String, typing: String) {
+        var inQuotes = false
+        var inAngle = false
+        var cut = raw.startIndex
+        for index in raw.indices {
+            switch raw[index] {
+            case "\"": inQuotes.toggle()
+            case "<": inAngle = true
+            case ">": inAngle = false
+            case ",", ";": if !inQuotes && !inAngle { cut = raw.index(after: index) }
+            default: break
+            }
+        }
+        let typing = raw[cut...]
+        let leading = typing.prefix { $0.isWhitespace }
+        return (String(raw[..<cut]) + leading, String(typing.dropFirst(leading.count)))
+    }
+
+    /// Replaces the address being typed with a chosen one, ready for the next.
+    public static func complete(_ raw: String, with address: EmailAddress) -> String {
+        var entered = splitTyping(raw).entered
+        if !entered.isEmpty, !entered.hasSuffix(" ") { entered += " " }
+        return entered + address.formatted + ", "
+    }
+
     /// A display name for a sender: their name, or the part of the address before the `@`.
     public static func displayName(name: String, email: String) -> String {
         if !name.isEmpty, name != email { return name }

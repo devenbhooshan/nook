@@ -33,6 +33,8 @@
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Nook suggests recipients from your Contacts as you type an address. They stay on this Mac.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

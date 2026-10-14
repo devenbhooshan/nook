@@ -21,6 +21,7 @@
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
+- **Recipients as you type.** To and Cc suggest people from your mail (the ones you write to come first) and, if you allow it, your Mac's Contacts. Both are read on your Mac.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Works with your AI assistant.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and draft replies for you to review. It's off until you turn it on.
 - **Native.** SwiftUI, light and dark mode, and a single pinned dependency (SQLCipher, for encryption).
@@ -245,7 +246,7 @@ No identity or credentials live in the repository. Forks sign with their own (`N
 
 `scripts/test.sh` adds the framework paths Swift Testing needs when only the Command Line Tools are installed. With Xcode, plain `swift test` works too.
 
-Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`. To check input handling, `--keys down,space,end,j,…` presses keys and `--swipe` swipes back; both print what is open and how far it is scrolled.
+Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--to <text>` (a new message with that typed in To), `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`. To check input handling, `--keys down,space,end,j,…` presses keys and `--swipe` swipes back; both print what is open and how far it is scrolled. `--snapshot <file.png>` saves the window (or its sheet) as an image, even when it's on another Space.
 
 To try the MCP server against a scratch store in a debug build: `NOOK_MCP_ENABLED=1 swift run nook-mcp --database /tmp/nook.sqlite` (or set `NOOK_DATABASE`). Release builds ignore `NOOK_MCP_ENABLED` and only honor the switch in Settings.
 

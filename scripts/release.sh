@@ -30,7 +30,7 @@ app="build/Nook.app"
 bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/Info.plist)"
 codesign --force --options runtime --timestamp --sign "$identity" "$app/Contents/Frameworks/SQLCipher.framework"
 codesign --force --options runtime --timestamp --identifier "$bundle_id" --sign "$identity" "$app/Contents/MacOS/nook-mcp"
-codesign --force --options runtime --timestamp --sign "$identity" "$app"
+codesign --force --options runtime --timestamp --entitlements Resources/Nook.entitlements --sign "$identity" "$app"
 codesign --verify --deep --strict --verbose=2 "$app"
 
 dmg="build/Nook-$version.dmg"
