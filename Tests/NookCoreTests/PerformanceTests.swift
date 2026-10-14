@@ -12,10 +12,11 @@ struct PerformanceTests {
     static let messages = 10_000
     static let threads = 4_000
 
-    /// Shared CI machines (GitHub's macOS runners) run this workload about 2.5x slower than a recent Mac.
-    /// The budgets are about people's Macs, so CI gets a 2x allowance: still tight enough to catch a regression
-    /// like the multi-second tab switch these tests were written for.
-    static let machineAllowance: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 2
+    /// Shared CI machines (GitHub's macOS runners) run this workload 2-3x slower than a recent Mac, and the same
+    /// commit varies by about 30% from one runner to the next. The budgets are about people's Macs, so CI gets a 3x
+    /// allowance: still tight enough to catch a regression like the multi-second tab switch these tests were
+    /// written for. Locally the budgets apply as written.
+    static let machineAllowance: Double = ProcessInfo.processInfo.environment["CI"] == nil ? 1 : 3
     static let budget: Duration = .milliseconds(25 * machineAllowance)
 
     /// Built once for the suite: a store with two accounts, tags, and a realistic mix of read/unread/archived mail.
