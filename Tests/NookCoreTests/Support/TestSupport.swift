@@ -54,8 +54,6 @@ actor FakeGmail: GmailService {
     private(set) var minimalFetches: [String] = []
     private(set) var historyCalls = 0
     private(set) var modifiedThreads: [(id: String, add: [String], remove: [String])] = []
-    private(set) var modifiedMessages: [(ids: [String], add: [String], remove: [String])] = []
-    private var failModifications = false
     private(set) var sent: [(raw: String, threadId: String?)] = []
 
     init(messages: [GmailMessage] = []) {
@@ -117,19 +115,6 @@ actor FakeGmail: GmailService {
     }
 
     func modifyMessage(id: String, add: [String], remove: [String]) async throws {}
-
-    func modifyMessages(ids: [String], add: [String], remove: [String]) async throws {
-        if failModifications { throw GmailError.http(status: 500, message: "Backend Error") }
-        modifiedMessages.append((ids, add, remove))
-        for id in ids {
-            guard var labels = messages[id]?.labelIds else { continue }
-            labels.removeAll { remove.contains($0) }
-            labels.append(contentsOf: add.filter { !labels.contains($0) })
-            messages[id]?.labelIds = labels
-        }
-    }
-
-    func failModifications(_ fail: Bool) { failModifications = fail }
     func trashThread(id: String) async throws {}
     func untrashThread(id: String) async throws {}
 

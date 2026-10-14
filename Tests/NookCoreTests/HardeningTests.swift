@@ -153,4 +153,19 @@ struct HardeningTests {
         #expect(reopened.threads(ThreadQuery()).first?.subject == "Still here")
         #expect(try reopened.db.query("PRAGMA user_version").first?.int("user_version") == Schema.version)
     }
+
+    @Test func storesFromTheRemovedRulesFeatureLoseItsTable() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nook-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        do {
+            let repo = MailRepository(db: try Database(path: url.path))
+            try repo.upsert([.fixture(id: "1", subject: "Still here")])
+            // A store upgraded while the rules feature existed.
+            try repo.db.run("CREATE TABLE rules(id TEXT PRIMARY KEY, position INTEGER NOT NULL DEFAULT 0, definition TEXT NOT NULL)")
+            try repo.db.run("PRAGMA user_version = 7")
+        }
+        let reopened = MailRepository(db: try Database(path: url.path))
+        #expect(try reopened.db.query("SELECT name FROM sqlite_master WHERE name = 'rules'").isEmpty)
+        #expect(reopened.threads(ThreadQuery()).first?.subject == "Still here")
+    }
 }

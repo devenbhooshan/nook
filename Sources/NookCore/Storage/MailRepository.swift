@@ -47,7 +47,7 @@ public final class MailRepository: @unchecked Sendable {
     public let db: Database
     /// Where lists, counts and thread reads go. A separate read-only connection in the app, so the UI never
     /// waits behind a sync's write transaction; the same connection in tests and for in-memory stores.
-    let reader: Database
+    private let reader: Database
 
     public init(db: Database, reader: Database? = nil) {
         self.db = db
@@ -516,7 +516,6 @@ public final class MailRepository: @unchecked Sendable {
                 )
             }
             try db.execute("DELETE FROM message_tags WHERE tag NOT IN (SELECT name FROM tags)")
-            try updateRuleTags(renames: renames, remaining: Set(tags.map(\.name)))
             try ThreadIndex.rebuild(db)
         }
     }

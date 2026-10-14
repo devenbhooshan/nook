@@ -28,8 +28,6 @@ public protocol GmailService: Sendable {
     func history(since historyId: String) async throws -> GmailHistory
     func modifyThread(id: String, add: [String], remove: [String]) async throws
     func modifyMessage(id: String, add: [String], remove: [String]) async throws
-    /// The same label change on many messages at once (up to 1,000 per call).
-    func modifyMessages(ids: [String], add: [String], remove: [String]) async throws
     func trashThread(id: String) async throws
     func untrashThread(id: String) async throws
     func send(raw: String, threadId: String?) async throws
@@ -134,15 +132,6 @@ public struct GmailClient: GmailService {
 
     public func modifyMessage(id: String, add: [String], remove: [String]) async throws {
         _ = try await request("messages/\(id)/modify", method: "POST", body: ["addLabelIds": add, "removeLabelIds": remove])
-    }
-
-    public func modifyMessages(ids: [String], add: [String], remove: [String]) async throws {
-        for start in stride(from: 0, to: ids.count, by: 1000) {
-            let chunk = Array(ids[start..<min(start + 1000, ids.count)])
-            _ = try await request(
-                "messages/batchModify", method: "POST", body: ["ids": chunk, "addLabelIds": add, "removeLabelIds": remove]
-            )
-        }
     }
 
     public func trashThread(id: String) async throws {

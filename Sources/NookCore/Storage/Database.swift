@@ -219,7 +219,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 7
+    static let version = 8
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -249,16 +249,10 @@ enum Schema {
                     try db.run("ALTER TABLE accounts ADD COLUMN pending_history_id TEXT")
                 }
             }),
-            (7, {
-                // Rules you set up. Conditions and actions are stored as JSON, so new kinds don't need a migration.
-                try db.run("""
-                CREATE TABLE IF NOT EXISTS rules(
-                    id TEXT PRIMARY KEY,
-                    position INTEGER NOT NULL DEFAULT 0,
-                    definition TEXT NOT NULL
-                );
-                """)
-            }),
+            // Version 7 briefly added a `rules` table, for a feature that was removed. Stores that got it are at
+            // version 7, so the cleanup is version 8; anything older skips straight past both.
+            (7, {}),
+            (8, { try db.run("DROP TABLE IF EXISTS rules") }),
         ]
         for (number, step) in steps where current < number {
             try step()

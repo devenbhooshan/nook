@@ -138,25 +138,6 @@ Inside the app, Nook avoids counters on purpose: a tab with unread mail just rea
 
 Tagging starts as soon as mail arrives, newest first, alongside the sync. See [Setting up tagging](#2-setting-up-tagging) to choose the engine.
 
-## Rules
-
-Rules file predictable mail the moment it arrives, before it reaches your inbox. Each rule has conditions, which must all match, and actions:
-
-- **Conditions:** From, To, Subject, or "Subject or body" contains some text (case doesn't matter).
-- **Actions:** skip the inbox (archive), mark as read, star, and add a tag.
-
-For example, Stripe sends an email for every payment. To keep only new customers in your inbox:
-
-| Rule | When | Then |
-| --- | --- | --- |
-| Stripe renewals | From contains `notifications@stripe.com` and body contains `Subscription update` | Skip the inbox, mark as read |
-
-New-customer emails say "Subscription creation", so they don't match and stay in your inbox.
-
-Create rules in **Settings → Rules**, or from an open email with **Create rule from this email…** in the command palette (`⌘K`). The editor previews which of your recent emails match. A new rule acts on mail that arrives after you create it, and you can also apply it once to matching mail you already have.
-
-Rule changes are made in Gmail too, so your phone matches. Rules run before the on-device model, and the model leaves mail a rule tagged alone. Rules are exact, and the model is for mail you can't predict.
-
 ## Using Nook from an AI assistant (MCP)
 
 Nook includes `nook-mcp`, a [Model Context Protocol](https://modelcontextprotocol.io) server over your local mail store.

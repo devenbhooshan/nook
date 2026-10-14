@@ -14,7 +14,6 @@ enum DemoData {
     /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply,
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [tagging]` shows a later onboarding step,
-    /// `--settings [tab]` opens Settings, `--rule` starts a rule from the open conversation,
     /// `--keys down,space,…` presses keys once the window is up, `--swipe` swipes back,
     /// and `--dark` forces dark mode. Used for screenshots and for checking input handling.
     /// Queues real key events, so they go through the same monitors as typing.
@@ -75,12 +74,10 @@ enum DemoData {
         if arguments.contains("--compose") { store.reply(.reply) }
         if arguments.contains("--palette") { store.openPalette() }
         if arguments.contains("--unread") { store.toggleUnreadOnly() }
-        if let flag = arguments.firstIndex(of: "--settings") {
+        if arguments.contains("--settings") {
             // Same path as the "Sign in again…" button, so it can be checked without clicking.
-            let tab = arguments.indices.contains(flag + 1) ? SettingsTab(rawValue: arguments[flag + 1]) : nil
-            DispatchQueue.main.async { store.openSettings(tab: tab) }
+            DispatchQueue.main.async { store.openSettings() }
         }
-        if arguments.contains("--rule") { store.createRuleFromCurrentThread() }
         if let flag = arguments.firstIndex(of: "--split"), arguments.indices.contains(flag + 1) {
             store.setSplit(.tag(arguments[flag + 1]))
         }
@@ -173,17 +170,6 @@ enum DemoData {
         for (message, tags) in samples {
             try? repo.setAutoTags(tags, account: message.account, messageId: message.id)
         }
-
-        try? repo.saveRule(MailRule(
-            name: "GitHub notifications",
-            conditions: [RuleCondition(field: .from, value: "notifications@github.example")],
-            actions: RuleActions(skipInbox: true, markRead: true, tag: "Notification")
-        ))
-        try? repo.saveRule(MailRule(
-            name: "Bank statements",
-            conditions: [RuleCondition(field: .from, value: "firstharbor.example"), RuleCondition(field: .subject, value: "statement")],
-            actions: RuleActions(star: true, tag: "Finance")
-        ))
     }
 }
 
@@ -196,7 +182,6 @@ struct OfflineGmail: GmailService {
     func modifyThread(id: String, add: [String], remove: [String]) async throws {}
     func modifyMessage(id: String, add: [String], remove: [String]) async throws {}
     func trashThread(id: String) async throws {}
-    func modifyMessages(ids: [String], add: [String], remove: [String]) async throws {}
     func untrashThread(id: String) async throws {}
     func send(raw: String, threadId: String?) async throws {}
 }
