@@ -1,4 +1,5 @@
 import AppKit
+import NookCore
 import SwiftUI
 import WebKit
 
@@ -52,6 +53,7 @@ struct EmailWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         @Binding var height: CGFloat
         private var loadedHTML: String?
+        private var measured = ContentHeight()
         /// Set just before Nook loads a message, so that load is the one navigation the view allows.
         private var allowsNextLoad = false
 
@@ -62,14 +64,14 @@ struct EmailWebView: NSViewRepresentable {
         func load(_ html: String, in webView: WKWebView) {
             guard html != loadedHTML else { return }
             loadedHTML = html
+            measured = ContentHeight()
             allowsNextLoad = true
             webView.loadHTMLString(html, baseURL: nil)
         }
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let value = message.body as? Double, value > 0 else { return }
-            let newHeight = ceil(value)
-            if abs(newHeight - height) > 1 { height = newHeight }
+            guard let value = message.body as? Double, let newHeight = measured.report(value) else { return }
+            height = newHeight
         }
 
         @MainActor

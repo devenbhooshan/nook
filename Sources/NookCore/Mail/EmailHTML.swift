@@ -60,6 +60,9 @@ public enum EmailHTML {
 
     private static let htmlStyle = """
     html, body { margin: 0; padding: 0; }
+    /* The view is as tall as the message, so a page as tall as the view would grow forever. Specific enough to beat
+       the "html, body { height: 100% !important }" that marketing templates use. */
+    html:root, html:root > body { height: auto !important; min-height: 0 !important; }
     body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; overflow-wrap: anywhere; }
     img { max-width: 100%; height: auto; }
     table { max-width: 100% !important; }
