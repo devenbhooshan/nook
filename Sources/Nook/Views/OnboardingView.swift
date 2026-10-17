@@ -371,7 +371,7 @@ struct GoogleClientForm: View {
     @EnvironmentObject private var store: AppStore
     @State private var clientId = ""
     @State private var clientSecret = ""
-    @State private var showHelp = false
+    @State private var showHelp = DemoData.showClientHelp
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -390,8 +390,8 @@ struct GoogleClientForm: View {
 
             if showHelp {
                 VStack(alignment: .leading, spacing: 4) {
-                    step(1, "In Google Cloud Console, create a project and enable the Gmail API.")
-                    step(2, "Set up the OAuth consent screen (External, Testing) and add your Gmail address as a test user.")
+                    step(1, "In Google Cloud Console, create a project and enable the Gmail API and the People API.")
+                    step(2, "Under Google Auth Platform → Audience, keep External and click Publish app. (Left in Testing, Google signs you out every 7 days.)")
                     step(3, "Credentials → Create credentials → OAuth client ID → Desktop app.")
                     step(4, "Paste the client ID and secret below.")
                     Link("Open Google Cloud Console", destination: URL(string: "https://console.cloud.google.com/apis/credentials")!)

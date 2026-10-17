@@ -15,18 +15,14 @@
 
 ## Why Nook
 
-- **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
-- **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
-- **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
-- **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
+- **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
+- **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
-- **Recipients as you type.** To and Cc suggest people from your mail (the ones you write to come first) and, if you allow it, your Mac's Contacts. Both are read on your Mac.
-- **Real faces.** Senders' Google profile photos, from your contacts, the people you've emailed and your Workspace directory, and, if you turn it on, company logos. They're downloaded once and shown from your Mac; everyone else gets their initials.
-- **Your Gmail drafts.** Drafts from Gmail show up under **Drafts**. Open one to finish it, send it, or save your changes back to Gmail.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
-- **Works with your AI assistant.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and draft replies for you to review. It's off until you turn it on.
-- **Native.** SwiftUI, light and dark mode, and a single pinned dependency (SQLCipher, for encryption).
+- **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
+- **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
+- **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
 
 | Reader | Dark mode | Command palette |
 | --- | --- | --- |

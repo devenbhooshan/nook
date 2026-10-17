@@ -13,7 +13,7 @@ enum DemoData {
 
     /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply, `--to <text>` starts a new message with that typed in To,
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
-    /// `--onboarding [tagging]` shows a later onboarding step,
+    /// `--onboarding [connect|tagging]` shows an onboarding step (the assistant step by default), `--client-help` opens the Google client steps,
     /// `--keys down,space,…` presses keys once the window is up (in the compose sheet, when one is open), `--swipe` swipes back,
     /// `--notices` shows the signed-out and photo notices, `--snapshot <file.png>` saves the window, even on another Space, and `--dark` forces dark mode. Used for screenshots and for checking input handling.
     /// Queues real key events, so they go through the same monitors as typing.
@@ -114,8 +114,12 @@ enum DemoData {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { snapshot(store, to: path) }
         }
         if let flag = arguments.firstIndex(of: "--onboarding") {
-            let step = arguments.indices.contains(flag + 1) && arguments[flag + 1] == "tagging" ? OnboardingStep.setUpTagging : .connectAssistant
-            store.restartOnboarding(at: step)
+            let name = arguments.indices.contains(flag + 1) ? arguments[flag + 1] : ""
+            switch name {
+            case "connect": store.showDemoOnboarding(.connectAccount)
+            case "tagging": store.restartOnboarding(at: .setUpTagging)
+            default: store.restartOnboarding(at: .connectAssistant)
+            }
         }
     }
 
@@ -133,6 +137,9 @@ enum DemoData {
 
     /// `--demo --tooltips` shows every icon tooltip at once, for checking them in screenshots.
     static let showAllTooltips = CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--tooltips")
+
+    /// `--demo --client-help` opens the Google client steps, for screenshots of the first onboarding step.
+    static let showClientHelp = CommandLine.arguments.contains("--demo") && CommandLine.arguments.contains("--client-help")
 
     static func seed(_ repo: MailRepository) {
         let personal = "sam@hey.example"

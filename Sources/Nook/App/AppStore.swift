@@ -317,6 +317,13 @@ final class AppStore: ObservableObject {
     }
 
     /// For demo screenshots of onboarding after mail is connected.
+    /// Demo only: shows an onboarding step even though the demo has accounts, for screenshots.
+    func showDemoOnboarding(_ step: OnboardingStep) {
+        guard isDemo else { return }
+        onboardingCompleted = false
+        onboardingStep = step
+    }
+
     func restartOnboarding(at step: OnboardingStep) {
         onboardingCompleted = false
         taggingReviewed = step == .connectAssistant
