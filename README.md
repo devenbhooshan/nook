@@ -9,10 +9,7 @@
   Fast keyboard-driven mail, stored on your Mac and tagged by a model that runs on your Mac.
 </p>
 
-<p align="center">
-  <a href="docs/nook-tour.mp4"><img src="docs/nook-tour.png" alt="Watch the 35-second tour of Nook"></a><br>
-  <sub><a href="docs/nook-tour.mp4">▶ Watch the 35-second tour</a></sub>
-</p>
+https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 
 ## Why Nook
 
