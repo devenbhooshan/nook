@@ -31,6 +31,10 @@ public protocol GmailService: Sendable {
     func trashThread(id: String) async throws
     func untrashThread(id: String) async throws
     func send(raw: String, threadId: String?) async throws
+    /// The id of the Gmail draft holding this message, or nil if there's no such draft any more.
+    func draftID(messageId: String) async throws -> String?
+    func updateDraft(id: String, raw: String, threadId: String?) async throws
+    func sendDraft(id: String) async throws
 }
 
 /// Sends HTTP requests. `URLSession` conforms; tests use a stub.
@@ -147,6 +151,34 @@ public struct GmailClient: GmailService {
         if let threadId { body["threadId"] = threadId }
         // A 5xx on send can arrive after Gmail already accepted the message; retrying could send it twice.
         _ = try await request("messages/send", method: "POST", body: body, retryServerErrors: false)
+    }
+
+    public func draftID(messageId: String) async throws -> String? {
+        struct Page: Decodable {
+            struct Draft: Decodable { struct Message: Decodable { var id: String }; var id: String; var message: Message }
+            var drafts: [Draft]?
+            var nextPageToken: String?
+        }
+        var pageToken: String?
+        repeat {
+            var items = [URLQueryItem(name: "maxResults", value: "500")]
+            if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+            let page: Page = try await get("drafts", query: items)
+            if let draft = page.drafts?.first(where: { $0.message.id == messageId }) { return draft.id }
+            pageToken = page.nextPageToken
+        } while pageToken != nil
+        return nil
+    }
+
+    public func updateDraft(id: String, raw: String, threadId: String?) async throws {
+        var message: [String: Any] = ["raw": raw]
+        if let threadId { message["threadId"] = threadId }
+        _ = try await request("drafts/\(id)", method: "PUT", body: ["id": id, "message": message])
+    }
+
+    public func sendDraft(id: String) async throws {
+        // Like a plain send, a 5xx may arrive after Gmail sent it; don't retry.
+        _ = try await request("drafts/send", method: "POST", body: ["id": id], retryServerErrors: false)
     }
 
     // MARK: Transport

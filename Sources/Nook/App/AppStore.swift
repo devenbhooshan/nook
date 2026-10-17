@@ -386,8 +386,9 @@ final class AppStore: ObservableObject {
         selectedID.flatMap { id in threads.first { $0.id == id } }
     }
 
-    /// The thread actions apply to: the open one, otherwise the selected one.
-    var currentThread: ThreadSummary? { openThread ?? selectedThread }
+    /// The thread actions apply to: the open one, otherwise the selected one. None in Drafts: a reply draft's row
+    /// stands for the draft, and archiving or trashing would act on the conversation it belongs to.
+    var currentThread: ThreadSummary? { effectiveMailbox == .drafts ? nil : openThread ?? selectedThread }
 
     var isSearching: Bool { SearchQuery.parse(searchText) != nil }
 
@@ -460,6 +461,7 @@ final class AppStore: ObservableObject {
     func open(_ thread: ThreadSummary? = nil) {
         guard let thread = thread ?? selectedThread else { return }
         selectedID = thread.id
+        if effectiveMailbox == .drafts { return openGmailDraft(thread) }
         if unreadOnly { keptVisible.insert(thread.id) }
         openThread = thread
         openMessages = repo.threadMessages(account: thread.account, threadId: thread.threadId)
@@ -902,6 +904,42 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Opens a Gmail draft to finish. A reply draft stays in its conversation.
+    private func openGmailDraft(_ row: ThreadSummary) {
+        guard let message = repo.message(account: row.account, id: row.latestMessageId) else { return }
+        let isReply = !repo.threadMessages(account: row.account, threadId: message.threadId).isEmpty
+        let references = message.references.trimmingCharacters(in: .whitespaces)
+        openDraft(Draft(
+            from: row.account, to: message.to, cc: message.cc, subject: message.subject, body: message.bodyText,
+            threadId: isReply ? message.threadId : nil,
+            inReplyTo: references.split(separator: " ").last.map(String.init),
+            references: references.isEmpty ? nil : references,
+            gmailDraftMessageId: message.id
+        ))
+    }
+
+    /// Writes your edits back to the Gmail draft this was opened from.
+    func saveDraft(_ draft: Draft) {
+        guard let messageId = draft.gmailDraftMessageId else { return }
+        self.draft = nil
+        let raw = MIMEBuilder.gmailRaw(draft, fromName: account(for: draft.from)?.name ?? "")
+        let sync = sync
+        Task {
+            do {
+                let service = try await sync.service(for: draft.from)
+                guard let id = try await service.draftID(messageId: messageId) else {
+                    return showToast("That draft was sent or deleted elsewhere.", isError: true)
+                }
+                try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
+                showToast("Draft saved")
+                syncNow()
+            } catch {
+                if self.draft == nil { self.draft = draft }
+                showToast("Couldn't save the draft: \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
     func compose() {
         openDraft(Draft(from: scope ?? accounts.first?.email ?? ""))
     }
@@ -924,7 +962,16 @@ final class AppStore: ObservableObject {
         let sync = sync
         Task {
             do {
-                try await sync.service(for: draft.from).send(raw: raw, threadId: draft.threadId)
+                let service = try await sync.service(for: draft.from)
+                // A Gmail draft is sent as that draft, so it leaves Drafts everywhere instead of lingering there.
+                if let messageId = draft.gmailDraftMessageId, let id = try await service.draftID(messageId: messageId) {
+                    try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
+                    try await service.sendDraft(id: id)
+                    try? repo.deleteMessages(account: draft.from, ids: [messageId])
+                    reload()
+                } else {
+                    try await service.send(raw: raw, threadId: draft.threadId)
+                }
                 showToast("Sent")
                 syncNow()
             } catch {

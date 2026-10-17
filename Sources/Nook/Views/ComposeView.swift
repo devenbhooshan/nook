@@ -65,15 +65,31 @@ struct ComposeView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                 Spacer()
-                Button("Discard") {
-                    if hasEdits { confirmDiscard = true } else { dismiss() }
-                }
-                .keyboardShortcut(.cancelAction)
-                .confirmationDialog("Discard this message?", isPresented: $confirmDiscard) {
-                    Button("Discard", role: .destructive) { dismiss() }
-                    Button("Keep Writing", role: .cancel) {}
-                } message: {
-                    Text("What you've written will be lost.")
+                if draft.gmailDraftMessageId != nil {
+                    // A draft from Gmail: closing keeps it in Drafts, with your changes if you want them.
+                    Button("Close") {
+                        if hasEdits { confirmDiscard = true } else { dismiss() }
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .help("Close and keep the draft (Esc)")
+                    .confirmationDialog("Save your changes to this draft?", isPresented: $confirmDiscard) {
+                        Button("Save Draft") { store.saveDraft(draft) }
+                        Button("Discard Changes", role: .destructive) { dismiss() }
+                        Button("Keep Writing", role: .cancel) {}
+                    } message: {
+                        Text("The draft stays in Drafts either way.")
+                    }
+                } else {
+                    Button("Discard") {
+                        if hasEdits { confirmDiscard = true } else { dismiss() }
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    .confirmationDialog("Discard this message?", isPresented: $confirmDiscard) {
+                        Button("Discard", role: .destructive) { dismiss() }
+                        Button("Keep Writing", role: .cancel) {}
+                    } message: {
+                        Text("What you've written will be lost.")
+                    }
                 }
                 Button {
                     store.send(draft)

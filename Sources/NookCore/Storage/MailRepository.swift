@@ -131,7 +131,7 @@ public final class MailRepository: @unchecked Sendable {
         let rows = (try? reader.query(
             """
             SELECT lower(substr(from_email, instr(from_email, '@') + 1)) AS domain, COUNT(*) AS n FROM messages
-            WHERE instr(from_email, '@') > 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%'
+            WHERE instr(from_email, '@') > 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,DRAFT,%'
             GROUP BY domain ORDER BY n DESC LIMIT ?
             """, [limit]
         )) ?? []
@@ -143,7 +143,7 @@ public final class MailRepository: @unchecked Sendable {
         // With a single MAX(), SQLite takes the bare from_name from the newest message: the sender's latest name.
         let senders = (try? reader.query("""
             SELECT from_name, from_email, COUNT(*) AS n, MAX(date) AS last FROM messages
-            WHERE from_email != '' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,SENT,%'
+            WHERE from_email != '' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,DRAFT,%'
             GROUP BY lower(from_email)
             """)) ?? []
         let sent = (try? reader.query("SELECT to_addr, cc, date FROM messages WHERE labels LIKE '%,SENT,%'")) ?? []
@@ -241,7 +241,7 @@ public final class MailRepository: @unchecked Sendable {
 
     public func threadMessages(account: String, threadId: String) -> [MailMessage] {
         let rows = (try? reader.query(
-            "\(Self.selectWithBodies) WHERE m.account = ? AND m.thread_id = ? ORDER BY m.date ASC",
+            "\(Self.selectWithBodies) WHERE m.account = ? AND m.thread_id = ? AND m.labels NOT LIKE '%,DRAFT,%' ORDER BY m.date ASC",
             [account, threadId]
         )) ?? []
         return rows.map(Self.message(from:))
@@ -290,6 +290,7 @@ public final class MailRepository: @unchecked Sendable {
     /// size, not the size of the mailbox. Search narrows with the full-text index first, then groups.
     public func threads(_ query: ThreadQuery) -> [ThreadSummary] {
         if query.search != nil { return searchThreads(query) }
+        if query.mailbox == .drafts { return drafts(query) }
         let keys = pageOfThreads(query)
         return summaries(for: keys, mailbox: query.effectiveMailbox)
     }
@@ -299,6 +300,8 @@ public final class MailRepository: @unchecked Sendable {
         switch mailbox {
         case .inbox: "in_inbox"
         case .sent: "in_sent"
+        // Drafts aren't part of conversations; `drafts(_:)` lists them.
+        case .drafts: "0"
         case .starred: "starred"
         case .trash: "in_trash"
         case .all: "visible"
@@ -336,6 +339,34 @@ public final class MailRepository: @unchecked Sendable {
             arguments
         )) ?? []
         return rows.map { ThreadKey(account: $0.string("account"), threadId: $0.string("thread_id")) }
+    }
+
+    /// Unsent drafts, newest first, one row per conversation. A row shows who the draft is to.
+    private func drafts(_ query: ThreadQuery) -> [ThreadSummary] {
+        var clauses = ["m.labels LIKE '%,DRAFT,%'", "m.labels NOT LIKE '%,TRASH,%'"]
+        var arguments: [Any?] = []
+        if let account = query.account {
+            clauses.append("m.account = ?")
+            arguments.append(account)
+        }
+        arguments.append(query.limit)
+        let rows = (try? reader.query(
+            """
+            SELECT m.account, m.id, m.thread_id, m.to_addr, m.subject, m.snippet, MAX(m.date) AS date
+            FROM messages m WHERE \(clauses.joined(separator: " AND "))
+            GROUP BY m.account, m.thread_id ORDER BY date DESC LIMIT ?
+            """,
+            arguments
+        )) ?? []
+        return rows.map { row in
+            let recipients = Addresses.parseList(row.string("to_addr"))
+            return ThreadSummary(
+                account: row.string("account"), threadId: row.string("thread_id"), latestMessageId: row.string("id"),
+                fromName: recipients.isEmpty ? "No recipient" : recipients.map { Addresses.displayName(name: $0.name, email: $0.email) }.joined(separator: ", "),
+                fromEmail: recipients.first?.email ?? "", subject: row.string("subject"), snippet: row.string("snippet"),
+                date: Date(timeIntervalSince1970: row.double("date")), messageCount: 1, isUnread: false, isStarred: false, tags: []
+            )
+        }
     }
 
     /// The row for each conversation: its newest message, message count and flags, in the order given.

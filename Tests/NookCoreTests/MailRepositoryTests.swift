@@ -111,6 +111,20 @@ struct MailRepositoryTests {
         #expect(ids(.starred) == ["starred"])
         #expect(ids(.trash) == ["trash"])
         #expect(ids(.all) == ["inbox", "archived", "sent", "starred"])
+        #expect(ids(.drafts) == ["draft"])
+    }
+
+    @Test func draftsListWhoTheyreToAndStayOutOfTheirConversation() throws {
+        try repo.upsert([
+            .fixture(id: "1", thread: "t", subject: "Plans", minutesAgo: 10),
+            .fixture(id: "2", thread: "t", from: "me@example.com", subject: "Re: Plans", labels: [SystemLabel.draft], to: "Anna Lee <anna@example.com>"),
+            .fixture(id: "3", from: "me@example.com", subject: "New idea", labels: [SystemLabel.draft], minutesAgo: 5, to: ""),
+        ])
+        let drafts = repo.threads(ThreadQuery(mailbox: .drafts))
+        #expect(drafts.map(\.latestMessageId) == ["2", "3"])
+        #expect(drafts.map(\.fromName) == ["Anna Lee", "No recipient"])
+        #expect(repo.threadMessages(account: "me@example.com", threadId: "t").map(\.id) == ["1"])
+        #expect(repo.threads(ThreadQuery(mailbox: .inbox)).first?.latestMessageId == "1")
     }
 
     @Test func scopesToOneAccountOrShowsAllTogether() throws {

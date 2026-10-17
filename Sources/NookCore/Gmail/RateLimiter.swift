@@ -52,7 +52,8 @@ enum GmailQuota {
         switch (method, path) {
         case (_, "profile"): 1
         case (_, "history"): 2
-        case ("POST", "messages/send"): 100
+        case ("POST", "messages/send"), ("POST", "drafts/send"): 100
+        case ("PUT", let p) where p.hasPrefix("drafts/"): 15
         case ("POST", let p) where p.hasPrefix("threads/"): 10
         default: 5
         }

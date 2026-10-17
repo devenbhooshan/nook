@@ -25,8 +25,7 @@ public struct SyncReport: Sendable, Equatable {
 public actor SyncEngine {
     public typealias ServiceFactory = @Sendable (String) throws -> GmailService
 
-    /// Drafts are excluded because Nook never stores them; listing them would re-download them on every resync.
-    public var initialQuery = "(in:inbox OR newer_than:60d) -in:drafts"
+    public var initialQuery = "in:inbox OR newer_than:60d OR in:drafts"
     public var initialLimit = 2000
     public var maxConcurrentFetches = 8
     /// Messages are saved, and observers notified, after each batch so the list fills in as it downloads.
@@ -37,6 +36,8 @@ public actor SyncEngine {
     private let makeService: ServiceFactory
     private let onChange: @Sendable () -> Void
     private var services: [String: GmailService] = [:]
+    /// Accounts whose drafts were checked since launch. Accounts synced before Nook kept drafts get theirs here.
+    private var draftsChecked: Set<String> = []
     private var running: [String: Task<SyncReport, Error>] = [:]
 
     private let now: @Sendable () -> Date
@@ -130,7 +131,14 @@ public actor SyncEngine {
         let service = try service(for: email)
         if let cursor = repo.account(email)?.historyId, !cursor.isEmpty {
             do {
-                return try await incrementalSync(email, service: service, cursor: cursor)
+                var report = try await incrementalSync(email, service: service, cursor: cursor)
+                if !draftsChecked.contains(email) {
+                    let ids = try await service.listMessageIDs(query: "in:drafts", limit: 500)
+                    let known = repo.messageIds(account: email)
+                    report.added += try await fetchAndStore(ids.filter { !known.contains($0) }, account: email, service: service)
+                    draftsChecked.insert(email)
+                }
+                return report
             } catch GmailError.notFound {
                 // History older than about a week expires. Start over, and re-check labels we can no longer replay.
                 try repo.setPendingHistoryId(nil, for: email)
@@ -195,7 +203,7 @@ public actor SyncEngine {
         var labelsUnknown = Set<String>()
         for record in history.records {
             for change in record.messagesAdded ?? [] {
-                // Drafts and spam are never stored, so don't download them only to throw them away.
+                // Spam is never stored, so don't download it only to throw it away.
                 if let labels = change.message.labelIds, !Self.shouldStore(labels: labels) { continue }
                 added.insert(change.message.id)
                 deleted.remove(change.message.id)
@@ -248,15 +256,15 @@ public actor SyncEngine {
 
     // MARK: Fetching
 
-    /// Spam and drafts are never stored.
+    /// Spam is never stored.
     static func shouldStore(labels: [String]) -> Bool {
-        !labels.contains(SystemLabel.spam) && !labels.contains(SystemLabel.draft)
+        !labels.contains(SystemLabel.spam)
     }
 
     /// Whether these labels put a message somewhere Nook shows it without searching.
     static func bringsIntoView(labels: [String]) -> Bool {
         shouldStore(labels: labels) && !labels.contains(SystemLabel.trash)
-            && (labels.contains(SystemLabel.inbox) || labels.contains(SystemLabel.starred))
+            && (labels.contains(SystemLabel.inbox) || labels.contains(SystemLabel.starred) || labels.contains(SystemLabel.draft))
     }
 
     private func fetchAndStore(_ ids: [String], account: String, service: GmailService) async throws -> Int {

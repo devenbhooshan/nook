@@ -18,7 +18,6 @@ struct SyncEngineTests {
             gmailMessage(id: "2", thread: "A", labels: ["INBOX", "UNREAD"], date: Date(timeIntervalSince1970: 200)),
             gmailMessage(id: "3", thread: "B", labels: [], date: Date(timeIntervalSince1970: 300)),
             gmailMessage(id: "spam", labels: ["SPAM"]),
-            gmailMessage(id: "draft", labels: ["DRAFT"]),
         ])
         let gmail = gmail
         let changes = changes
@@ -36,10 +35,27 @@ struct SyncEngineTests {
         #expect(changes.count >= 2)
     }
 
+    @Test func draftsAreStoredAndAccountsFromBeforeGetTheirDraftsOnce() async throws {
+        let gmail = FakeGmail(messages: [gmailMessage(id: "1"), gmailMessage(id: "old-draft", labels: ["DRAFT"])])
+        let engine = SyncEngine(repo: repo, makeService: { _ in gmail })
+        // Synced by a Nook that skipped drafts.
+        await engine.configure(initialQuery: "(in:inbox OR newer_than:60d) -in:drafts")
+        try await engine.sync(account)
+        #expect(repo.threads(ThreadQuery(mailbox: .drafts)).isEmpty)
+
+        try await engine.sync(account)
+        #expect(repo.threads(ThreadQuery(mailbox: .drafts)).map(\.latestMessageId) == ["old-draft"])
+
+        await gmail.add(gmailMessage(id: "new-draft", labels: ["DRAFT"]), historyId: "101")
+        await gmail.resetCounters()
+        try await engine.sync(account)
+        #expect(await gmail.fullFetches == ["new-draft"])
+    }
+
     @Test func storesInBatchesAndNotifiesAsItGoes() async throws {
         await engine.configure(batchSize: 1)
         try await engine.sync(account)
-        // One notification per stored batch (three messages; spam and drafts aren't listed) plus one at the end.
+        // One notification per stored batch (three messages; spam isn't listed) plus one at the end.
         #expect(changes.count == 4)
     }
 

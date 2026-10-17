@@ -92,7 +92,9 @@ actor FakeGmail: GmailService {
     /// Like Gmail, listings leave out spam and trash, and honor `-in:drafts`.
     func listMessageIDs(query: String, limit: Int) async throws -> [String] {
         let excluded: Set<String> = query.contains("-in:drafts") ? ["SPAM", "TRASH", "DRAFT"] : ["SPAM", "TRASH"]
-        let listed = messages.values.filter { excluded.isDisjoint(with: $0.labelIds ?? []) }
+        let listed = messages.values.filter {
+            excluded.isDisjoint(with: $0.labelIds ?? []) && (query != "in:drafts" || ($0.labelIds ?? []).contains("DRAFT"))
+        }
         return Array(listed.sorted { ($0.internalDate ?? "") > ($1.internalDate ?? "") }.map(\.id).prefix(limit))
     }
 
@@ -121,6 +123,10 @@ actor FakeGmail: GmailService {
     func send(raw: String, threadId: String?) async throws {
         sent.append((raw, threadId))
     }
+
+    func draftID(messageId: String) async throws -> String? { "draft-\(messageId)" }
+    func updateDraft(id: String, raw: String, threadId: String?) async throws {}
+    func sendDraft(id: String) async throws {}
 
     func resetCounters() {
         fullFetches = []

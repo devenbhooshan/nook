@@ -77,12 +77,12 @@ struct ReviewFixTests {
         // An old message moved back to the inbox: worth fetching.
         await gmail.add(gmailMessage(id: "back", labels: []), historyId: "100")
         await gmail.relabel("back", labels: ["INBOX"], historyId: "110")
-        // A draft being written: never stored, so never fetched.
+        // A draft being written: shown in Drafts, so fetched.
         await gmail.add(gmailMessage(id: "draft", labels: ["DRAFT"]), historyId: "111")
 
         try await engine.sync(account)
-        #expect(await gmail.fullFetches == ["back"])
-        #expect(repo.messageIds(account: account) == ["seen", "back"])
+        #expect(Set(await gmail.fullFetches) == ["back", "draft"])
+        #expect(repo.messageIds(account: account) == ["seen", "back", "draft"])
     }
 
     // MARK: 2. Charsets

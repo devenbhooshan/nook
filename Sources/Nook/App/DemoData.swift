@@ -207,6 +207,9 @@ struct OfflineGmail: GmailService {
     func trashThread(id: String) async throws {}
     func untrashThread(id: String) async throws {}
     func send(raw: String, threadId: String?) async throws {}
+    func draftID(messageId: String) async throws -> String? { nil }
+    func updateDraft(id: String, raw: String, threadId: String?) async throws {}
+    func sendDraft(id: String) async throws {}
 }
 
 /// A full-length newsletter, so the demo has a conversation long enough to scroll.

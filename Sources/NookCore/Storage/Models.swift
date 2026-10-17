@@ -31,7 +31,7 @@ public enum SystemLabel {
 }
 
 public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
-    case inbox, starred, sent, all, trash
+    case inbox, starred, sent, drafts, all, trash
 
     public var id: String { rawValue }
 
@@ -40,6 +40,7 @@ public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
         case .inbox: "Inbox"
         case .starred: "Starred"
         case .sent: "Sent"
+        case .drafts: "Drafts"
         case .all: "All Mail"
         case .trash: "Trash"
         }
@@ -50,6 +51,7 @@ public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
         case .inbox: "tray"
         case .starred: "star"
         case .sent: "paperplane"
+        case .drafts: "doc.text"
         case .all: "archivebox"
         case .trash: "trash"
         }
@@ -61,6 +63,7 @@ public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
         case .inbox: SystemLabel.inbox
         case .starred: SystemLabel.starred
         case .sent: SystemLabel.sent
+        case .drafts: SystemLabel.draft
         case .trash: SystemLabel.trash
         case .all: nil
         }
@@ -191,11 +194,14 @@ public struct Draft: Identifiable, Hashable, Sendable {
     public var threadId: String?
     public var inReplyTo: String?
     public var references: String?
+    /// The Gmail draft this was opened from, by its message id. Sending sends that draft; saving updates it.
+    public var gmailDraftMessageId: String?
 
     public init(
         from: String, to: String = "", cc: String = "", subject: String = "", body: String = "",
-        threadId: String? = nil, inReplyTo: String? = nil, references: String? = nil
+        threadId: String? = nil, inReplyTo: String? = nil, references: String? = nil, gmailDraftMessageId: String? = nil
     ) {
+        self.gmailDraftMessageId = gmailDraftMessageId
         self.from = from
         self.to = to
         self.cc = cc
