@@ -108,6 +108,29 @@ struct GooglePeopleTests {
     }
 }
 
+/// Answers by URL, since downloads run in no particular order. Each URL's replies are used in turn.
+final class PhotoServer: HTTPTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var replies: [String: [StubTransport.Reply]]
+    private(set) var count = 0
+
+    init(_ replies: [String: [StubTransport.Reply]]) {
+        self.replies = replies
+    }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        let reply: StubTransport.Reply = lock.withLock {
+            count += 1
+            let key = request.url!.absoluteString
+            guard var queue = replies[key], !queue.isEmpty else { return StubTransport.Reply(500) }
+            let next = queue.removeFirst()
+            replies[key] = queue
+            return next
+        }
+        return (reply.body, HTTPURLResponse(url: request.url!, statusCode: reply.status, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
 @Suite("Stored profile photos")
 struct AvatarStoreTests {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent("nook-avatars-\(UUID().uuidString)")
@@ -115,14 +138,18 @@ struct AvatarStoreTests {
     @Test func downloadsOnceAndAgainOnlyWhenThePhotoChanges() async throws {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = AvatarStore(directory: directory)
-        let transport = StubTransport([.init(200, "anna-1"), .init(200, "bo"), .init(404), .init(200, "anna-2")])
+        let transport = PhotoServer([
+            "https://lh3/anna-1": [.init(200, "anna-1")],
+            "https://lh3/bo": [.init(200, "bo")],
+            "https://lh3/anna-2": [.init(404), .init(200, "anna-2")],
+        ])
         let photos = ["anna@example.com": URL(string: "https://lh3/anna-1")!, "bo@example.com": URL(string: "https://lh3/bo")!]
 
-        #expect(await store.download(photos, transport: transport, concurrent: 1).count == 2)
+        #expect(await store.download(photos, transport: transport).count == 2)
         #expect(store.image(for: "Anna@Example.com") == Data("anna-1".utf8))
         // Nothing new, so nothing is fetched.
         #expect(await store.download(photos, transport: transport).isEmpty)
-        #expect(transport.recorded.count == 2)
+        #expect(transport.count == 2)
 
         // A failed download keeps the old photo; a changed link replaces it.
         let changed = ["anna@example.com": URL(string: "https://lh3/anna-2")!]
