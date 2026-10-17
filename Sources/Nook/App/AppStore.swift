@@ -298,7 +298,8 @@ final class AppStore: ObservableObject {
             if onboardingCompleted != false { onboardingCompleted = false }
             if taggingReviewed { taggingReviewed = false }
         }
-        let step = OnboardingStep.current(hasAccounts: !accounts.isEmpty, completed: onboardingCompleted, taggingReviewed: taggingReviewed)
+        let step = demoOnboardingStep
+            ?? OnboardingStep.current(hasAccounts: !accounts.isEmpty, completed: onboardingCompleted, taggingReviewed: taggingReviewed)
         if step != onboardingStep {
             withAnimation(.snappy(duration: 0.25)) { onboardingStep = step }
         }
@@ -320,9 +321,12 @@ final class AppStore: ObservableObject {
     /// Demo only: shows an onboarding step even though the demo has accounts, for screenshots.
     func showDemoOnboarding(_ step: OnboardingStep) {
         guard isDemo else { return }
-        onboardingCompleted = false
+        demoOnboardingStep = step
         onboardingStep = step
     }
+
+    /// Demo only: an onboarding step to keep showing, whatever the accounts say.
+    private var demoOnboardingStep: OnboardingStep?
 
     func restartOnboarding(at step: OnboardingStep) {
         onboardingCompleted = false
