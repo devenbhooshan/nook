@@ -6,6 +6,7 @@ struct CommandPaletteView: View {
     @State private var query = ""
     @State private var highlighted = 0
     @State private var commands: [PaletteCommand] = []
+    @State private var ranking = PaletteRanking.load()
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -80,28 +81,8 @@ struct CommandPaletteView: View {
     }
 
     private var results: [PaletteCommand] {
-        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !needle.isEmpty else { return commands }
-        return commands
-            .compactMap { command -> (PaletteCommand, Int)? in
-                guard let score = Self.score(command.title.lowercased(), needle) else { return nil }
-                return (command, score)
-            }
-            .sorted { $0.1 < $1.1 }
-            .map(\.0)
-    }
-
-    /// Lower is better: prefix match, then word-start match, then substring, then in-order characters.
-    static func score(_ title: String, _ needle: String) -> Int? {
-        if title.hasPrefix(needle) { return 0 }
-        if title.split(separator: " ").contains(where: { $0.hasPrefix(needle) }) { return 1 }
-        if title.contains(needle) { return 2 }
-        var remaining = Substring(needle)
-        for character in title where character == remaining.first {
-            remaining = remaining.dropFirst()
-            if remaining.isEmpty { return 3 }
-        }
-        return nil
+        let byTitle = Dictionary(commands.map { ($0.title, $0) }, uniquingKeysWith: { first, _ in first })
+        return ranking.rank(commands.map(\.title), query: query).compactMap { byTitle[$0] }
     }
 
     private func row(_ command: PaletteCommand, isHighlighted: Bool) -> some View {
@@ -135,6 +116,8 @@ struct CommandPaletteView: View {
     private func run() {
         guard results.indices.contains(highlighted) else { return }
         let command = results[highlighted]
+        ranking.record(query: query, title: command.title)
+        ranking.save()
         close()
         command.action()
     }
