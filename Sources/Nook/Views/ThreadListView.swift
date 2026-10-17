@@ -466,8 +466,6 @@ struct ThreadRow: View {
     let tagColor: (String) -> Int
 
     @State private var hovering = false
-    @ObservedObject private var photos = AvatarImages.shared
-
     private var tags: [String] { thread.tags.filter { $0 != hiddenTag } }
 
     var body: some View {
@@ -477,20 +475,14 @@ struct ThreadRow: View {
                 .frame(width: 7, height: 7)
 
             HStack(spacing: 8) {
-                // The sender's photo when Nook has one; otherwise the row stays as it was.
-                if let photo = photos.image(for: thread.fromEmail) {
-                    Image(nsImage: photo)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 20, height: 20)
-                        .clipShape(Circle())
-                }
+                // The sender's photo, or their initials when there's no photo.
+                Avatar(name: thread.fromName, email: thread.fromEmail, size: 24)
                 Text(Addresses.displayName(name: thread.fromName, email: thread.fromEmail))
                     .font(.system(size: 13.5, weight: thread.isUnread ? .semibold : .regular))
                     .foregroundStyle(thread.isUnread ? .primary : .secondary)
                     .lineLimit(1)
             }
-            .frame(width: 190, alignment: .leading)
+            .frame(width: 222, alignment: .leading)
 
             HStack(spacing: 8) {
                 Text(thread.subject.isEmpty ? "(no subject)" : thread.subject)
