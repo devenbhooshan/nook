@@ -22,6 +22,7 @@
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Recipients as you type.** To and Cc suggest people from your mail (the ones you write to come first) and, if you allow it, your Mac's Contacts. Both are read on your Mac.
+- **Real faces.** Senders' Google profile photos, from your contacts, the people you've emailed and your Workspace directory. They're downloaded once and shown from your Mac.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Works with your AI assistant.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and draft replies for you to review. It's off until you turn it on.
 - **Native.** SwiftUI, light and dark mode, and a single pinned dependency (SQLCipher, for encryption).
@@ -64,7 +65,7 @@ On first launch, Nook walks you through three steps: **connect mail**, **choose 
 
 Nook uses your own OAuth client, so no third party is ever involved. This takes about five minutes, once:
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project, then go to **APIs & Services → Library** and **enable the Gmail API**.
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project, then go to **APIs & Services → Library** and **enable the Gmail API** and the **People API** (for senders' profile photos).
 2. Under **Google Auth Platform → Audience**, keep the user type **External** and the status **Testing**. Under **Test users**, click **Add users** and add *every* address you'll connect. Only test users can sign in while the app is in Testing.
 3. Under **Clients** (or **Credentials → Create credentials → OAuth client ID**), create a client with application type **Desktop app**. The Scopes step is optional: Nook asks for what it needs when you sign in.
 4. Paste the client ID and secret into Nook (on the welcome screen, or later in **Settings → Accounts**) and click **Connect Gmail**.
@@ -72,7 +73,7 @@ Nook uses your own OAuth client, so no third party is ever involved. This takes 
 Your browser opens Google's sign-in. Expect two screens:
 
 - **"Google hasn't verified this app."** This is expected for your own client. Click **Continue**.
-- **"Select what Nook can access."** Make sure **Read, compose, and send emails from your Gmail account** is ticked, then click **Continue**.
+- **"Select what Nook can access."** Make sure **Read, compose, and send emails from your Gmail account** is ticked, then click **Continue**. The contacts and directory boxes are for profile photos; leave them unticked and Nook shows initials instead.
 
 Google then redirects to a one-time listener on `127.0.0.1`, and Nook takes over. The first sync downloads your inbox plus the last 60 days. Add more accounts in **Settings → Accounts**.
 
@@ -220,8 +221,9 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | Mail, tags, search index | `~/Library/Application Support/Nook/nook.sqlite`, encrypted with SQLCipher (AES-256), readable only by you |
 | Database encryption key | macOS Keychain, created on first launch, this device only |
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
+| Senders' profile photos | `~/Library/Caches/com.devenbhooshan.nook/Avatars`, downloaded once from Google, files named by a hash of the address |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
-| Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, and your Ollama server if you use one |
+| Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
 | MCP | No network at all: stdio to the client that launches `nook-mcp` |
 
 ## Development

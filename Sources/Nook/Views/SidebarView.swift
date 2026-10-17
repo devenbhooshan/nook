@@ -42,7 +42,7 @@ struct SidebarView: View {
                                 title: account.email,
                                 leading: AnyView(AccountDot(colorIndex: account.colorIndex).frame(width: 16)),
                                 hasUnread: (store.unreadCounts[account.email] ?? 0) > 0,
-                                warning: store.syncErrors[account.email],
+                                warning: store.needsSignIn(account.email) ? "Signed out. Sign in again to resume syncing." : store.syncErrors[account.email],
                                 isSelected: store.scope == account.email
                             ) { store.setScope(account.email) }
                         }
@@ -156,6 +156,10 @@ private struct SidebarFooter: View {
                 if store.isSyncing {
                     ProgressView().controlSize(.mini)
                     Text("Syncing…")
+                } else if !store.signedOutAccounts.isEmpty {
+                    Image(systemName: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
+                    Text(store.signedOutAccounts.count == 1 ? "An account is signed out" : "Accounts are signed out")
+                        .help(store.signedOutAccounts.joined(separator: "\n"))
                 } else if !store.syncErrors.isEmpty {
                     Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
                     Text("Sync problem").help(store.syncErrors.values.joined(separator: "\n"))

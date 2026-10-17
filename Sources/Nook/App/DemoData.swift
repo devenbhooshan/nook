@@ -15,7 +15,7 @@ enum DemoData {
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [tagging]` shows a later onboarding step,
     /// `--keys down,space,…` presses keys once the window is up (in the compose sheet, when one is open), `--swipe` swipes back,
-    /// `--snapshot <file.png>` saves the window, even on another Space, and `--dark` forces dark mode. Used for screenshots and for checking input handling.
+    /// `--notices` shows the signed-out and photo notices, `--snapshot <file.png>` saves the window, even on another Space, and `--dark` forces dark mode. Used for screenshots and for checking input handling.
     /// Queues real key events, so they go through the same monitors as typing.
     private static func pressKeys(_ keys: [String], in store: AppStore) {
         guard let main = store.mainWindow else { return }
@@ -104,6 +104,10 @@ enum DemoData {
         if arguments.contains("--swipe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { swipeBack(in: store) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
+        }
+        if arguments.contains("--notices") {
+            // After the first sync, which would otherwise clear them.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { store.showDemoAccountProblems() }
         }
         if let flag = arguments.firstIndex(of: "--snapshot"), arguments.indices.contains(flag + 1) {
             let path = arguments[flag + 1]

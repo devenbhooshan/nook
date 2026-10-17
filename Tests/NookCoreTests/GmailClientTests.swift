@@ -239,7 +239,7 @@ struct GoogleOAuthTests {
 
     @Test func surfacesGoogleErrorDescriptions() async throws {
         let transport = StubTransport([.init(400, #"{"error":"invalid_grant","error_description":"Token has been expired or revoked."}"#)])
-        await #expect(throws: OAuthError.tokenRequestFailed("Token has been expired or revoked.")) {
+        await #expect(throws: OAuthError.signInExpired) {
             _ = try await GoogleOAuth.refresh(TokenSet(accessToken: "", refreshToken: "r", expiry: .now), config: .init(clientId: "c", clientSecret: "s"), transport: transport)
         }
     }

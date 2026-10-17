@@ -59,8 +59,15 @@ final class AppStore: ObservableObject {
     @Published private(set) var isSyncing = false
     /// Whether any mail is stored at all. Separates "your first sync is running" from "this view is empty".
     @Published private(set) var hasStoredMail = false
-    /// Accounts whose stored sign-in is missing, for example after a Keychain reset.
+    /// Accounts that have to be signed in again: their sign-in is missing (a Keychain reset, say) or Google ended it.
     @Published private(set) var signedOutAccounts: [String] = []
+    /// Accounts whose sign-in Google revoked or expired, found by a failed sync.
+    private var expiredSignIns: Set<String> = []
+    /// Whether each account lets Nook fetch profile photos.
+    @Published private(set) var photoAccess: [String: PhotoAccess] = [:]
+    private var photosRefreshed: Date?
+    /// Profile photos on disk. Not used in demo mode.
+    let avatars: AvatarStore?
     @Published private(set) var lastSynced: Date?
     @Published private(set) var syncErrors: [String: String] = [:]
     @Published private(set) var taggerStatus = TaggerStatus()
@@ -143,6 +150,7 @@ final class AppStore: ObservableObject {
         self.repo = repo
         self.secrets = secrets
         self.isDemo = isDemo
+        avatars = isDemo ? nil : (try? AvatarStore.defaultDirectory()).map(AvatarStore.init(directory:))
         if isDemo, let demo = UserDefaults(suiteName: Self.demoDefaultsSuite) {
             demo.removePersistentDomain(forName: Self.demoDefaultsSuite)
             defaults = demo
@@ -236,6 +244,7 @@ final class AppStore: ObservableObject {
             .store(in: &subscriptions)
 
         keyRouter.install()
+        if let avatars { AvatarImages.shared.loaded(avatars, updated: []) }
         DemoData.applyLaunchOptions(to: self)
         if startedWithFreshStore {
             showToast("Nook couldn't unlock its saved mail, so it's downloading it again.", isError: true)
@@ -257,7 +266,8 @@ final class AppStore: ObservableObject {
         if checkSignIns {
             hasGoogleClient = isDemo || googleConfig.isComplete
             // Demo accounts never have stored sign-ins; don't call them signed out.
-            signedOutAccounts = isDemo ? [] : accounts.map(\.email).filter { secrets.tokens(for: $0) == nil }
+            let missing = isDemo ? [] : accounts.map(\.email).filter { secrets.tokens(for: $0) == nil }
+            signedOutAccounts = accounts.map(\.email).filter { missing.contains($0) || expiredSignIns.contains($0) }
         } else {
             signedOutAccounts.removeAll { email in !accounts.contains { $0.email == email } }
         }
@@ -493,26 +503,28 @@ final class AppStore: ObservableObject {
         // so a long first sync doesn't leave the inbox untagged until every account finishes.
         Task.detached { await tagger.run() }
         Task {
-            let errors = await withTaskGroup(of: (String, String?).self) { group in
+            let errors = await withTaskGroup(of: (String, Error?).self) { group in
                 for email in emails {
                     group.addTask {
                         do {
                             try await sync.sync(email)
                             return (email, nil)
                         } catch {
-                            return (email, error.localizedDescription)
+                            return (email, error)
                         }
                     }
                 }
-                var errors: [String: String] = [:]
+                var errors: [String: Error] = [:]
                 for await (email, error) in group { errors[email] = error }
                 return errors
             }
-            syncErrors = errors.compactMapValues { $0 }
+            syncErrors = errors.mapValues(\.localizedDescription)
+            expiredSignIns = Set(errors.filter { GoogleOAuth.requiresSignIn($0.value) }.keys)
             isSyncing = false
             lastSynced = Date()
-            loadAccounts(checkSignIns: !syncErrors.isEmpty)
+            loadAccounts(checkSignIns: !syncErrors.isEmpty || !signedOutAccounts.isEmpty)
             reload()
+            refreshPhotosIfDue()
             Task.detached { await tagger.run() }
         }
     }
@@ -546,19 +558,22 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func addAccount() {
+    /// Opens Google sign-in. With an address, Google preselects that account, for signing it in again.
+    func addAccount(hint: String? = nil) {
         guard !isSigningIn else { return }
         isSigningIn = true
         let config = googleConfig
         Task {
             defer { isSigningIn = false }
             do {
-                let result = try await GoogleOAuth.signIn(config: config, openURL: { url in
+                let result = try await GoogleOAuth.signIn(config: config, loginHint: hint, openURL: { url in
                     DispatchQueue.main.async { NSWorkspace.shared.open(url) }
                 })
                 try secrets.setTokens(result.tokens, for: result.email)
                 try repo.addAccount(email: result.email, name: result.name)
                 await sync.forget(result.email)
+                expiredSignIns.remove(result.email)
+                photosRefreshed = nil
                 NSApp.activate()
                 loadAccounts(checkSignIns: true)
                 syncErrors[result.email] = nil
@@ -570,12 +585,44 @@ final class AppStore: ObservableObject {
                     do { try await sync.sync(result.email) } catch { syncErrors[result.email] = error.localizedDescription }
                     loadAccounts()
                     reload()
+                    refreshPhotosIfDue()
                     Task.detached { await tagger.run() }
                 }
             } catch is CancellationError {
             } catch {
                 showToast(error.localizedDescription, isError: true)
             }
+        }
+    }
+
+    // MARK: Profile photos
+
+    /// Demo only: one account signed out and another missing photo permission, for checking the notices.
+    func showDemoAccountProblems() {
+        guard isDemo, accounts.count > 1 else { return }
+        expiredSignIns = [accounts[1].email]
+        photoAccess = [accounts[0].email: .needsPermission]
+        loadAccounts(checkSignIns: true)
+    }
+
+    /// Refreshes profile photos at most once a day: Google's photo links for every account, then any photo that's new.
+    private func refreshPhotosIfDue() {
+        guard let avatars, photosRefreshed.map({ Date().timeIntervalSince($0) > 86_400 }) ?? true else { return }
+        let signedIn = accounts.map(\.email).filter { !signedOutAccounts.contains($0) }
+        guard !signedIn.isEmpty else { return }
+        photosRefreshed = Date()
+        let secrets = secrets
+        let config = googleConfig
+        var directories: [String: PhotoDirectory] = [:]
+        for email in signedIn {
+            guard let tokens = secrets.tokens(for: email) else { continue }
+            directories[email] = GooglePeople(tokens: OAuthTokenProvider(email: email, tokens: tokens, config: config, store: secrets))
+        }
+        Task {
+            let result = await PhotoSync.run(directories: directories)
+            photoAccess = result.access
+            let updated = await avatars.download(result.photos)
+            AvatarImages.shared.loaded(avatars, updated: updated)
         }
     }
 

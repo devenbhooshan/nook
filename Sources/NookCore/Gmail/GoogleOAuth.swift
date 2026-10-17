@@ -39,6 +39,8 @@ public enum OAuthError: Error, LocalizedError, Equatable {
     case missingCode
     case missingRefreshToken
     case tokenRequestFailed(String)
+    /// Google revoked or expired the sign-in (a password change, removed access, or a 7-day testing-mode limit).
+    case signInExpired
 
     public var errorDescription: String? {
         switch self {
@@ -48,13 +50,28 @@ public enum OAuthError: Error, LocalizedError, Equatable {
         case .missingCode: "Google didn't return an authorization code."
         case .missingRefreshToken: "Google didn't return a refresh token. Remove Nook's access at myaccount.google.com/permissions and try again."
         case .tokenRequestFailed(let message): "Google sign-in failed: \(message)"
+        case .signInExpired: "Google ended Nook's sign-in. Sign in again to resume syncing."
         }
     }
 }
 
 /// Google OAuth 2.0 for installed apps: authorization code + PKCE over a loopback redirect.
 public enum GoogleOAuth {
-    public static let scopes = ["https://www.googleapis.com/auth/gmail.modify", "openid", "email", "profile"]
+    /// Whether an error means the account has to be signed in again, rather than something that passes on its own.
+    public static func requiresSignIn(_ error: Error) -> Bool {
+        switch error {
+        case OAuthError.signInExpired, GmailError.unauthorized, GmailError.notSignedIn: true
+        default: false
+        }
+    }
+
+    public static let scopes = [
+        "https://www.googleapis.com/auth/gmail.modify", "openid", "email", "profile",
+        // Profile photos for senders: your contacts, the people you've emailed, and your Workspace directory.
+        "https://www.googleapis.com/auth/contacts.readonly",
+        "https://www.googleapis.com/auth/contacts.other.readonly",
+        "https://www.googleapis.com/auth/directory.readonly",
+    ]
     static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
     static let userInfoEndpoint = URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!
@@ -69,6 +86,7 @@ public enum GoogleOAuth {
     public static func signIn(
         config: GoogleClientConfig,
         transport: HTTPTransport = URLSession.shared,
+        loginHint: String? = nil,
         openURL: @Sendable (URL) -> Void,
         timeout: Duration = .seconds(300)
     ) async throws -> SignInResult {
@@ -81,7 +99,7 @@ public enum GoogleOAuth {
         defer { server.stop() }
 
         let redirectURI = "http://127.0.0.1:\(port)"
-        openURL(authorizationURL(config: config, redirectURI: redirectURI, challenge: pkce.challenge, state: state))
+        openURL(authorizationURL(config: config, redirectURI: redirectURI, challenge: pkce.challenge, state: state, loginHint: loginHint))
 
         let callback = try await server.waitForCallback(timeout: timeout)
         if let error = callback["error"] { throw OAuthError.denied(error) }
@@ -93,7 +111,10 @@ public enum GoogleOAuth {
         return SignInResult(email: email, name: name, tokens: tokens)
     }
 
-    public static func authorizationURL(config: GoogleClientConfig, redirectURI: String, challenge: String, state: String) -> URL {
+    /// - Parameter loginHint: The account to preselect when signing an existing account in again.
+    public static func authorizationURL(
+        config: GoogleClientConfig, redirectURI: String, challenge: String, state: String, loginHint: String? = nil
+    ) -> URL {
         var components = URLComponents(url: authorizationEndpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: config.clientId),
@@ -106,6 +127,7 @@ public enum GoogleOAuth {
             URLQueryItem(name: "access_type", value: "offline"),
             URLQueryItem(name: "prompt", value: "consent select_account"),
         ]
+        if let loginHint { components.queryItems?.append(URLQueryItem(name: "login_hint", value: loginHint)) }
         return components.url!
     }
 
@@ -152,6 +174,7 @@ public enum GoogleOAuth {
         guard (200..<300).contains(response.statusCode) else {
             struct Failure: Decodable { var error: String?; var error_description: String? }
             let failure = try? JSONDecoder().decode(Failure.self, from: data)
+            if failure?.error == "invalid_grant" { throw OAuthError.signInExpired }
             throw OAuthError.tokenRequestFailed(failure?.error_description ?? failure?.error ?? "HTTP \(response.statusCode)")
         }
         return try JSONDecoder().decode(TokenResponse.self, from: data)

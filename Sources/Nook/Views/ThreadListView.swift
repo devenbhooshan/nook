@@ -23,9 +23,7 @@ struct ThreadListView: View {
             }
             .overlay(alignment: .bottom) { Divider().opacity(0.6) }
 
-            if !store.signedOutAccounts.isEmpty {
-                SignedOutNotice()
-            }
+            AccountNotices()
 
             if store.threads.isEmpty {
                 EmptyListView()
@@ -351,35 +349,88 @@ private struct EmptyListView: View {
     }
 }
 
-/// One quiet line when an account has lost its sign-in, instead of a silent, stale inbox.
-private struct SignedOutNotice: View {
+/// Says plainly when an account needs signing in again, so an inbox never goes quietly stale.
+/// Below it, a dismissable line when profile photos need permission or the People API.
+private struct AccountNotices: View {
     @EnvironmentObject private var store: AppStore
+    @AppStorage("ui.photoNoticeDismissed") private var photoNoticeDismissed = false
 
     var body: some View {
+        if !store.signedOutAccounts.isEmpty {
+            notice(
+                icon: "person.crop.circle.badge.exclamationmark", tint: .orange, emphasis: true,
+                message: signedOutMessage, action: "Sign in again", help: signInHelp(store.signedOutAccounts)
+            ) { signIn(store.signedOutAccounts) }
+        }
+        if !photoNoticeDismissed, let photo = photoNotice {
+            notice(icon: "person.crop.circle", tint: .secondary, emphasis: false, message: photo.message, action: photo.action, help: photo.help,
+                   onDismiss: { photoNoticeDismissed = true }, perform: photo.perform)
+        }
+    }
+
+    private var signedOutMessage: String {
+        let emails = store.signedOutAccounts
+        return emails.count == 1
+            ? "\(emails[0]) is signed out. It isn't syncing until you sign in again."
+            : "\(emails.joined(separator: ", ")) are signed out. They aren't syncing until you sign in again."
+    }
+
+    private var photoNotice: (message: String, action: String, help: String, perform: () -> Void)? {
+        let access = store.photoAccess.filter { !store.signedOutAccounts.contains($0.key) }
+        if let link = access.values.lazy.compactMap({ if case .apiDisabled(let link) = $0 { link } else { nil } }).first ?? (access.values.contains(.apiDisabled(nil)) ? URL(string: "https://console.cloud.google.com/apis/library/people.googleapis.com") : nil) {
+            return ("Profile photos need the People API turned on in your Google Cloud project.", "Turn On…",
+                    "Opens Google Cloud Console. Click Enable, then Nook fetches photos on its next refresh.", { NSWorkspace.shared.open(link) })
+        }
+        let needed = access.filter { $0.value == .needsPermission }.map(\.key).sorted()
+        guard !needed.isEmpty else { return nil }
+        let who = needed.count == 1 ? needed[0] : needed.joined(separator: ", ")
+        return ("Sign in again to show profile photos for \(who).", "Sign in again", signInHelp(needed), { signIn(needed) })
+    }
+
+    private func signInHelp(_ emails: [String]) -> String {
+        emails.count == 1 ? "Opens Google sign-in for \(emails[0])." : "Opens Settings, where each account has its own Sign in again button."
+    }
+
+    /// One account goes straight to Google with it preselected; several go to Settings, one button each.
+    private func signIn(_ emails: [String]) {
+        if emails.count == 1, store.hasGoogleClient {
+            store.addAccount(hint: emails[0])
+        } else {
+            store.openSettings(tab: .accounts)
+        }
+    }
+
+    private func notice(
+        icon: String, tint: Color, emphasis: Bool, message: String, action: String, help: String,
+        onDismiss: (() -> Void)? = nil, perform: @escaping () -> Void
+    ) -> some View {
         ContentColumn {
             HStack(spacing: 10) {
-                Image(systemName: "person.crop.circle.badge.exclamationmark")
-                    .foregroundStyle(.orange)
+                Image(systemName: icon)
+                    .foregroundStyle(tint)
                 Text(message)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 12.5, weight: emphasis ? .medium : .regular))
+                    .foregroundStyle(emphasis ? .primary : .secondary)
+                    .lineLimit(2)
                 Spacer()
-                Button("Sign in again…") { store.openSettings(tab: .accounts) }
+                Button(store.isSigningIn && action == "Sign in again" ? "Waiting for Google…" : action, action: perform)
                     .buttonStyle(.textLink)
                     .font(.system(size: 12.5, weight: .medium))
+                    .disabled(store.isSigningIn)
+                    .help(help)
+                if let onDismiss {
+                    Button(action: onDismiss) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tertiary)
+                        .clickable()
+                        .help("Hide. Settings › Accounts still shows it.")
+                }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
         }
-        .background(Color.orange.opacity(0.06))
+        .background(emphasis ? Color.orange.opacity(0.10) : Color.primary.opacity(0.03))
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
-    }
-
-    private var message: String {
-        let emails = store.signedOutAccounts
-        return emails.count == 1
-            ? "\(emails[0]) is signed out, so it isn't syncing."
-            : "\(emails.count == 2 ? "Two" : "Some") accounts are signed out, so they aren't syncing."
     }
 }
 

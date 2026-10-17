@@ -23,13 +23,24 @@ struct Avatar: View {
     let email: String
     var size: CGFloat = 32
 
+    @ObservedObject private var photos = AvatarImages.shared
+
     var body: some View {
-        let color = Theme.color(for: email)
-        Text(Addresses.initials(name: name, email: email))
-            .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
-            .foregroundStyle(color)
-            .frame(width: size, height: size)
-            .background(color.opacity(0.15), in: Circle())
+        if let photo = photos.image(for: email) {
+            Image(nsImage: photo)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        } else {
+            let color = Theme.color(for: email)
+            Text(Addresses.initials(name: name, email: email))
+                .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
+                .foregroundStyle(color)
+                .frame(width: size, height: size)
+                .background(color.opacity(0.15), in: Circle())
+        }
     }
 }
 

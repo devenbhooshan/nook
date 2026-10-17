@@ -105,8 +105,8 @@ private struct AccountsSettings: View {
                             Text(status(for: account)).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        if store.needsSignIn(account.email), store.hasGoogleClient {
-                            Button(store.isSigningIn ? "Waiting for Google…" : "Sign in again") { store.addAccount() }
+                        if store.hasGoogleClient, store.needsSignIn(account.email) || store.photoAccess[account.email] == .needsPermission {
+                            Button(store.isSigningIn ? "Waiting for Google…" : "Sign in again") { store.addAccount(hint: account.email) }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(store.isSigningIn)
                                 .help("Opens Google sign-in. Choose \(account.email).")
@@ -154,7 +154,12 @@ private struct AccountsSettings: View {
         }
         if let error = store.syncErrors[account.email] { return error }
         guard let lastSync = account.lastSync else { return "Not synced yet" }
-        return "Synced \(lastSync.formatted(.relative(presentation: .named)))"
+        let synced = "Synced \(lastSync.formatted(.relative(presentation: .named)))"
+        switch store.photoAccess[account.email] {
+        case .needsPermission: return synced + ". Sign in again to show profile photos."
+        case .apiDisabled: return synced + ". Profile photos need the People API turned on in Google Cloud."
+        default: return synced
+        }
     }
 }
 
@@ -405,7 +410,10 @@ private struct PrivacySettings: View {
                     Text("~/Library/Application Support/Nook").textSelection(.enabled)
                 }
                 LabeledContent("Sign-in tokens", value: "macOS Keychain, this Mac only")
-                LabeledContent("Network", value: "Only Google's Gmail and sign-in APIs")
+                LabeledContent("Profile photos") {
+                    Text("~/Library/Caches/com.devenbhooshan.nook/Avatars").textSelection(.enabled)
+                }
+                LabeledContent("Network", value: "Only Google: Gmail, sign-in, and contacts for photos")
                 LabeledContent("AI tagging", value: "On this Mac (Apple Intelligence or Ollama)")
                 HStack {
                     Spacer()
