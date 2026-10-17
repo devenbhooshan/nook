@@ -623,12 +623,14 @@ final class AppStore: ObservableObject {
         Task {
             let result = await PhotoSync.run(directories: directories)
             photoAccess = result.access
-            var updated = await avatars.download(result.photos)
-            if brandLogos {
-                let logos = await BrandLogos.refresh(domains: domains, store: avatars)
-                updated.formUnion(logos.map(BrandLogos.key(for:)))
-            }
+            let updated = await avatars.download(result.photos)
             AvatarImages.shared.loaded(avatars, updated: updated)
+            if brandLogos {
+                // Logos show batch by batch: a full pass over a few hundred domains takes a while.
+                await BrandLogos.refresh(domains: domains, store: avatars) { saved in
+                    await MainActor.run { AvatarImages.shared.loaded(avatars, updated: Set(saved.map(BrandLogos.key(for:)))) }
+                }
+            }
         }
     }
 

@@ -33,29 +33,37 @@ public enum BrandLogos {
         return (0...(labels.count - 2)).map { labels[$0...].joined(separator: ".") }
     }
 
-    /// Finds each domain's logo and downloads the ones that are new or changed. Returns the domains with a new logo.
+    /// Finds each domain's logo and downloads the ones that are new or changed, a batch at a time, so logos appear as
+    /// they arrive. `onBatch` gets each batch's domains with a new logo. Returns all of them.
     public static func refresh(
-        domains: [String], store: AvatarStore, dns: TXTResolver = SystemDNS(), transport: HTTPTransport = AvatarStore.session
+        domains: [String], store: AvatarStore, dns: TXTResolver = SystemDNS(timeout: 2),
+        transport: HTTPTransport = AvatarStore.session, batchSize: Int = 16,
+        onBatch: @Sendable (Set<String>) async -> Void = { _ in }
     ) async -> Set<String> {
-        var found: [String: URL] = [:]
-        var known: [String: URL?] = [:]
-        for domain in domains {
-            for candidate in candidates(for: domain) {
-                let url: URL?
-                if let cached = known[candidate] {
-                    url = cached
-                } else {
-                    url = logoURL(fromRecords: await dns.txt("default._bimi.\(candidate)"))
-                    known[candidate] = url
+        var updated: Set<String> = []
+        for start in stride(from: 0, to: domains.count, by: max(1, batchSize)) {
+            let batch = Array(domains[start..<min(start + max(1, batchSize), domains.count)])
+            let found = await withTaskGroup(of: (String, URL?).self, returning: [String: URL].self) { group in
+                for domain in batch {
+                    group.addTask { (domain, await logoURL(for: domain, dns: dns)) }
                 }
-                if let url {
-                    found[key(for: domain)] = url
-                    break
-                }
+                var found: [String: URL] = [:]
+                for await (domain, url) in group { if let url { found[key(for: domain)] = url } }
+                return found
             }
+            let saved = Set(await store.download(found, transport: transport).map { String($0.dropFirst()) })
+            updated.formUnion(saved)
+            if !saved.isEmpty { await onBatch(saved) }
         }
-        let updated = await store.download(found, transport: transport)
-        return Set(updated.map { String($0.dropFirst()) })
+        return updated
+    }
+
+    /// The first BIMI logo found for the domain or one of its parents.
+    static func logoURL(for domain: String, dns: TXTResolver) async -> URL? {
+        for candidate in candidates(for: domain) {
+            if let url = logoURL(fromRecords: await dns.txt("default._bimi.\(candidate)")) { return url }
+        }
+        return nil
     }
 
     /// Where a domain's logo is kept in the photo store, beside people's photos.
