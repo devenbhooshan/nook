@@ -20,20 +20,59 @@ struct ComposeView: View {
         _showCc = State(initialValue: !draft.cc.isEmpty)
     }
 
+    /// Which account sends this. ⌘⇧F moves to the next one.
+    private var fromMenu: some View {
+        let current = store.accounts.first { $0.email == draft.from }
+        return Menu {
+            ForEach(store.accounts) { account in
+                Button {
+                    draft.from = account.email
+                } label: {
+                    Label { Text(account.email) } icon: { Image(nsImage: AccountDot.menuImage(colorIndex: account.colorIndex)) }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text("From").foregroundStyle(.secondary)
+                if let current { AccountDot(colorIndex: current.colorIndex) }
+                Text(draft.from).foregroundStyle(.primary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.system(size: 12.5))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(.primary.opacity(0.05), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .clickable()
+        .help("Send from another account (⌘⇧F)")
+        .background {
+            Button("Next account", action: nextAccount)
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .hidden()
+        }
+    }
+
+    private func nextAccount() {
+        let emails = store.accounts.map(\.email)
+        guard emails.count > 1 else { return }
+        let index = emails.firstIndex(of: draft.from) ?? -1
+        draft.from = emails[(index + 1) % emails.count]
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text(title).font(.system(size: 14, weight: .semibold))
                 Spacer()
                 if store.accounts.count > 1 {
-                    Picker("From", selection: $draft.from) {
-                        ForEach(store.accounts) { account in
-                            Text(account.email).tag(account.email)
-                        }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                    .controlSize(.small)
+                    fromMenu
                 }
             }
             .padding(.horizontal, 20)

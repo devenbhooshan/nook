@@ -61,6 +61,7 @@ public struct ShortcutInterpreter: Sendable {
                 case "i": return .go(.inbox)
                 case "s": return .go(.starred)
                 case "t": return .go(.sent)
+                case "d": return .go(.drafts)
                 case "a", "e": return .go(.all)
                 case "#": return .go(.trash)
                 default: break
@@ -143,11 +144,13 @@ public struct ShortcutInterpreter: Sendable {
             Entry(keys: "a", title: "Reply all"),
             Entry(keys: "f", title: "Forward"),
             Entry(keys: "⌘↵", title: "Send"),
+            Entry(keys: "⌘⇧F", title: "Send from the next account"),
         ]),
         Section(title: "Go to", entries: [
             Entry(keys: "g i", title: "Inbox"),
             Entry(keys: "g s", title: "Starred"),
             Entry(keys: "g t", title: "Sent"),
+            Entry(keys: "g d", title: "Drafts"),
             Entry(keys: "g a", title: "All mail"),
             Entry(keys: "g #", title: "Trash"),
         ]),
