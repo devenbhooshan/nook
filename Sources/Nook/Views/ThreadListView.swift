@@ -470,13 +470,18 @@ struct ThreadRow: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Circle()
-                .fill(thread.isUnread ? Theme.accent : .clear)
-                .frame(width: 7, height: 7)
-
-            HStack(spacing: 8) {
-                // The sender's photo, or their initials when there's no photo.
+            HStack(spacing: 10) {
+                // The sender's photo, or their initials, with the unread dot on its corner.
                 Avatar(name: thread.fromName, email: thread.fromEmail, size: 24)
+                    .overlay(alignment: .topLeading) {
+                        if thread.isUnread {
+                            Circle()
+                                .fill(Theme.accent)
+                                .frame(width: 8, height: 8)
+                                .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5))
+                                .offset(x: -2, y: -2)
+                        }
+                    }
                 Text(Addresses.displayName(name: thread.fromName, email: thread.fromEmail))
                     .font(.system(size: 13.5, weight: thread.isUnread ? .semibold : .regular))
                     .foregroundStyle(thread.isUnread ? .primary : .secondary)

@@ -166,5 +166,9 @@ struct AddressTests {
         #expect(Addresses.initials(name: "Jane Doe", email: "") == "JD")
         #expect(Addresses.initials(name: "", email: "jane.doe@x.com") == "JD")
         #expect(Addresses.initials(name: "", email: "") == "?")
+        #expect(Addresses.initials(name: "Deven at WarmDogo", email: "") == "DW")
+        #expect(Addresses.initials(name: "Priya K Natarajan", email: "") == "PN")
+        #expect(Addresses.initials(name: "The Margin", email: "") == "M")
+        #expect(Addresses.initials(name: "Stripe", email: "") == "S")
     }
 }

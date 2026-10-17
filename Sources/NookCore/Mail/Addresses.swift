@@ -89,12 +89,15 @@ public enum Addresses {
         return email.split(separator: "@").first.map(String.init) ?? email
     }
 
-    /// Up to two initials for an avatar.
+    /// Up to two initials for an avatar: the first and last words, skipping joiners like "at" and "from".
+    /// "Priya K Natarajan" gives PN, "Deven at WarmDogo" gives DW.
     public static func initials(name: String, email: String) -> String {
+        let joiners: Set<String> = ["at", "from", "via", "of", "the", "and", "&", "by", "for", "on", "team"]
         let words = displayName(name: name, email: email)
             .split(whereSeparator: { $0.isWhitespace || $0 == "." || $0 == "_" || $0 == "-" })
-            .filter { $0.first?.isLetter == true }
-        let letters = words.prefix(2).compactMap(\.first).map { String($0).uppercased() }
+            .filter { $0.first?.isLetter == true && !joiners.contains($0.lowercased()) }
+        let chosen = words.count > 1 ? [words[0], words[words.count - 1]] : words
+        let letters = chosen.compactMap(\.first).map { String($0).uppercased() }
         return letters.isEmpty ? "?" : letters.joined()
     }
 }
