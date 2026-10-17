@@ -20,9 +20,10 @@
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
-- **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
+- **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Recipients as you type.** To and Cc suggest people from your mail (the ones you write to come first) and, if you allow it, your Mac's Contacts. Both are read on your Mac.
-- **Real faces.** Senders' Google profile photos, from your contacts, the people you've emailed and your Workspace directory. They're downloaded once and shown from your Mac.
+- **Real faces.** Senders' Google profile photos, from your contacts, the people you've emailed and your Workspace directory, and, if you turn it on, company logos. They're downloaded once and shown from your Mac; everyone else gets their initials.
+- **Your Gmail drafts.** Drafts from Gmail show up under **Drafts**. Open one to finish it, send it, or save your changes back to Gmail.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Works with your AI assistant.** A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and draft replies for you to review. It's off until you turn it on.
 - **Native.** SwiftUI, light and dark mode, and a single pinned dependency (SQLCipher, for encryption).
@@ -112,15 +113,21 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 | `j` / `k` | Next / previous | `e` | Mark done (archive) | `c` | Compose |
 | `↵` | Open | `#` | Trash | `r` | Reply |
 | `esc` | Back | `s` | Star | `a` | Reply all |
-| `tab` / `⇧tab` | Next / previous split | `⇧U` | Show only unread | | |
+| `tab` / `⇧tab` | Next / previous split | `⇧U` | Show only unread | `⌘⇧F` | Send from the next account |
 | `/` | Search | `u` | Toggle read | `f` | Forward |
 | `⌘K` | Command palette | `l` | Tag | `⌘↵` | Send |
 | `⌘0`–`⌘9` | All accounts / one account | `z` | Undo | `?` | All shortcuts |
 | `⌘\` | Show or hide sidebar | | | | |
 
-Go-to sequences: `g i` inbox, `g s` starred, `g t` sent, `g a` all mail, `g #` trash.
+Go-to sequences: `g i` inbox, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
+
+In the ⌘K palette, the command you usually pick for the letters you type comes first: pick Move to Trash after typing `t` a couple of times, and `t` `↵` trashes. With nothing typed, the list keeps its fixed order.
 
 In an open conversation, `↑` / `↓` scroll it, `space` / `⇧space` and Page Up / Page Down move a page, and Home / End jump to the top or bottom. Swipe right with two fingers on a trackpad (or one on a Magic Mouse) to go back to the list; this follows **Swipe between pages** in System Settings.
+
+## Drafts
+
+Drafts you start in Gmail, on any device, show up under **Drafts** (`g d`), one row per draft with who it's to. Open one to finish it in Nook. **Send** sends that Gmail draft, so it disappears from Drafts everywhere; **Close** keeps it, and asks whether to save your changes back to Gmail. A message you start in Nook isn't saved as a draft yet: discarding it discards it.
 
 ## Search
 
@@ -139,6 +146,8 @@ Tags marked **Inbox tab** become tabs across the top of the inbox. By default th
 **Unread only**, in the account menu at the top left (or `⇧U`), shows only conversations with something unread, and Nook remembers it, so your inbox can open to just what's new. A conversation you read stays in the list until you switch tabs or accounts, so it doesn't vanish while you're in it.
 
 Inside the app, Nook avoids counters on purpose: a tab with unread mail just reads a little darker, and the sidebar uses a small dot. The one number is optional: the unread count on the Dock icon, which you can turn off in **Settings → General**.
+
+**Needs Reply** is kept for mail a real person is waiting on you to answer. Mail Gmail files under Promotions, Social or Forums, or that comes from a no-reply address, is never offered that tag, and a newsletter is never also tagged Needs Reply. Small models still slip now and then; a larger one, such as `qwen2.5:7b` in Ollama, tags noticeably better than `llama3.2`, at the cost of speed.
 
 Tagging starts as soon as mail arrives, newest first, alongside the sync. See [Setting up tagging](#2-setting-up-tagging) to choose the engine.
 
