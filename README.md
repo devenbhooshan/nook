@@ -30,7 +30,7 @@
 
 ## Download
 
-Get the latest **[Nook.dmg from Releases](https://github.com/supergrow-ai/nook/releases/latest)**, open it and drag Nook to Applications. Builds are signed with a Developer ID and notarized by Apple.
+Get the latest **[Nook.dmg from Releases](https://github.com/devenbhooshan/nook/releases/latest)**, open it and drag Nook to Applications. Builds are signed with a Developer ID and notarized by Apple.
 
 You'll still need your own Google Cloud OAuth client to connect Gmail; [Connecting Gmail](#1-connecting-gmail) walks you through it. To build from source instead, see [Getting started](#getting-started).
 
@@ -44,7 +44,7 @@ You'll still need your own Google Cloud OAuth client to connect Gmail; [Connecti
 ## Getting started
 
 ```bash
-git clone https://github.com/supergrow-ai/nook.git
+git clone https://github.com/devenbhooshan/nook.git
 cd nook
 ./scripts/build-app.sh          # builds build/Nook.app
 open build/Nook.app
