@@ -10,7 +10,8 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/list.png" alt="Nook's split inbox">
+  <a href="docs/nook-tour.mp4"><img src="docs/nook-tour.png" alt="Watch the 35-second tour of Nook"></a><br>
+  <sub><a href="docs/nook-tour.mp4">▶ Watch the 35-second tour</a></sub>
 </p>
 
 ## Why Nook
@@ -24,9 +25,9 @@
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
 - **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
 
-| Reader | Dark mode | Command palette |
-| --- | --- | --- |
-| ![Reader](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) | ![Command palette](docs/screenshots/palette.png) |
+| Split inbox | Reader | Dark mode | Command palette |
+| --- | --- | --- | --- |
+| ![Split inbox](docs/screenshots/list.png) | ![Reader](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) | ![Command palette](docs/screenshots/palette.png) |
 
 ## Download
 
