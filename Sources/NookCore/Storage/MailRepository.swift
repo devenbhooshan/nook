@@ -588,6 +588,34 @@ public final class MailRepository: @unchecked Sendable {
         }
     }
 
+    /// Applies a better tagging prompt to mail tagged with an older one. Needs Reply the tagger put on newsletters and
+    /// bulk mail goes at once; recent mail is then tagged again, newest first, keeping its old tags until then.
+    /// Tags you added yourself stay.
+    public func upgradeTags(since: Date) throws {
+        try db.transaction {
+            let rows = try db.query(
+                """
+                SELECT m.account, m.thread_id, m.id, m.from_email, m.labels,
+                       EXISTS (SELECT 1 FROM message_tags n WHERE n.account = r.account AND n.message_id = r.message_id AND n.tag = ?) AS newsletter
+                FROM message_tags r JOIN messages m ON m.account = r.account AND m.id = r.message_id
+                WHERE r.tag = ? AND r.source = 'auto'
+                """,
+                [TagPrompt.newsletterTag, TagPrompt.replyTag]
+            ).filter {
+                $0.int("newsletter") != 0
+                    || TagPrompt.isBulk(labels: Set($0.string("labels").split(separator: ",").map(String.init)), fromEmail: $0.string("from_email"))
+            }
+            for row in rows {
+                try db.execute(
+                    "DELETE FROM message_tags WHERE account = ? AND message_id = ? AND tag = ? AND source = 'auto'",
+                    [row.string("account"), row.string("id"), TagPrompt.replyTag]
+                )
+            }
+            try db.execute("UPDATE messages SET tagged = 0 WHERE date >= ?", [since.timeIntervalSince1970])
+            try ThreadIndex.refresh(db, Set(rows.map { ThreadKey(account: $0.string("account"), threadId: $0.string("thread_id")) }))
+        }
+    }
+
     public func tags(account: String, messageId: String) -> [String] {
         let rows = (try? db.query("SELECT tag FROM message_tags WHERE account = ? AND message_id = ? ORDER BY tag", [account, messageId])) ?? []
         return rows.map { $0.string("tag") }

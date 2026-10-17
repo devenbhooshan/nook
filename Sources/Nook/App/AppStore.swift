@@ -215,6 +215,7 @@ final class AppStore: ObservableObject {
         started = true
         Self.current = self
         loadAccounts()
+        upgradeTagsIfNeeded()
         tags = repo.tags()
         reload()
 
@@ -526,6 +527,15 @@ final class AppStore: ObservableObject {
             reload()
             refreshPhotosIfDue()
             Task.detached { await tagger.run() }
+        }
+    }
+
+    /// After a tagging prompt change, fixes the worst old verdicts now and re-tags the last month in the background.
+    private func upgradeTagsIfNeeded() {
+        let key = "tagging.promptVersion"
+        guard UserDefaults.standard.integer(forKey: key) < TagPrompt.version else { return }
+        if (try? repo.upgradeTags(since: Date().addingTimeInterval(-30 * 86400))) != nil {
+            UserDefaults.standard.set(TagPrompt.version, forKey: key)
         }
     }
 

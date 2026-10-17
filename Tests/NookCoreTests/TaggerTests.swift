@@ -16,6 +16,7 @@ struct TaggerTests {
         ("", []),
         ("Receipts", []),
         ("Shopping", []),
+        ("Needs Reply, Newsletter", ["Newsletter"]),
     ])
     func parsesModelResponses(response: String, expected: [String]) {
         #expect(TagPrompt.parse(response, allowed: tags) == expected)
@@ -28,6 +29,38 @@ struct TaggerTests {
         #expect(prompt.contains("From: Shop <shop@x.com>"))
         #expect(prompt.contains("Subject: Order shipped"))
         #expect(prompt.count < TagPrompt.maxBodyCharacters + 2000)
+    }
+
+    @Test func bulkMailIsNeverOfferedNeedsReply() {
+        let promo = MailMessage.fixture(id: "1", from: "info@members.netflix.com", labels: [SystemLabel.inbox, "CATEGORY_PROMOTIONS"])
+        let noReply = MailMessage.fixture(id: "2", from: "noreply@github.com")
+        let person = MailMessage.fixture(id: "3", from: "ravi@gmail.com", labels: [SystemLabel.inbox, "CATEGORY_PERSONAL"])
+        #expect(!TagPrompt.allowedTags(for: promo, tags: tags).map(\.name).contains("Needs Reply"))
+        #expect(!TagPrompt.allowedTags(for: noReply, tags: tags).map(\.name).contains("Needs Reply"))
+        #expect(TagPrompt.allowedTags(for: person, tags: tags).map(\.name).contains("Needs Reply"))
+        #expect(TagPrompt.prompt(for: promo, tags: tags).contains("Gmail filed it under: Promotions"))
+        #expect(TagPrompt.system(tags: tags).contains("Examples:"))
+        #expect(!TagPrompt.system(tags: TagPrompt.allowedTags(for: promo, tags: tags)).contains("Needs Reply"))
+    }
+
+    @Test func upgradeDropsNeedsReplyFromBulkMailAndRetagsRecentMail() throws {
+        let repo = try makeRepository()
+        try repo.upsert([
+            .fixture(id: "1", from: "info@members.netflix.com", labels: [SystemLabel.inbox, "CATEGORY_PROMOTIONS"]),
+            .fixture(id: "2", from: "andy@substack.com"),
+            .fixture(id: "3", from: "ravi@gmail.com"),
+            .fixture(id: "4", from: "old@gmail.com", minutesAgo: 60 * 24 * 60),
+        ])
+        try repo.setAutoTags(["Needs Reply"], account: "me@example.com", messageId: "1")
+        try repo.setAutoTags(["Needs Reply", "Newsletter"], account: "me@example.com", messageId: "2")
+        try repo.setAutoTags(["Needs Reply", "Receipt"], account: "me@example.com", messageId: "3")
+        try repo.setAutoTags(["Personal"], account: "me@example.com", messageId: "4")
+
+        try repo.upgradeTags(since: Date(timeIntervalSince1970: 1_700_000_000 - 30 * 86400))
+        #expect(repo.tags(account: "me@example.com", messageId: "1").isEmpty)
+        #expect(repo.tags(account: "me@example.com", messageId: "2") == ["Newsletter"])
+        #expect(repo.tags(account: "me@example.com", messageId: "3") == ["Needs Reply", "Receipt"])
+        #expect(repo.untaggedCount() == 3)
     }
 
     @Test func tagsEveryWaitingMessage() async throws {
