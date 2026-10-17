@@ -11,7 +11,7 @@ enum DemoData {
         return AppStore(repo: repo, secrets: MemorySecretStore(), makeService: { _ in OfflineGmail() }, isDemo: true)
     }
 
-    /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply, `--to <text>` starts a new message with that typed in To,
+    /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply, `--reply-body <text>` opens a reply prefilled the way an assistant's draft arrives, `--to <text>` starts a new message with that typed in To,
     /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [connect|tagging]` shows an onboarding step (the assistant step by default), `--client-help` opens the Google client steps,
     /// `--keys down,space,…` presses keys once the window is up (in the compose sheet, when one is open), `--swipe` swipes back,
@@ -84,6 +84,10 @@ enum DemoData {
             store.open(store.threads[index])
         }
         if arguments.contains("--compose") { store.reply(.reply) }
+        if let flag = arguments.firstIndex(of: "--reply-body"), arguments.indices.contains(flag + 1), let thread = store.currentThread {
+            // The way an assistant's draft arrives: a nook:// link that opens a prefilled reply.
+            store.handle(NookURL.reply(account: thread.account, threadId: thread.threadId, body: arguments[flag + 1], all: false).url)
+        }
         if let flag = arguments.firstIndex(of: "--to"), arguments.indices.contains(flag + 1) {
             store.handle(NookURL.compose(from: nil, to: arguments[flag + 1], cc: "", subject: "", body: "").url)
         }
