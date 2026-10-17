@@ -26,21 +26,23 @@ struct Avatar: View {
     @ObservedObject private var photos = AvatarImages.shared
 
     var body: some View {
-        if let photo = photos.image(for: email) {
-            Image(nsImage: photo)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFill()
-                .frame(width: size, height: size)
-                .clipShape(Circle())
-        } else {
-            let color = Theme.color(for: email)
-            Text(Addresses.initials(name: name, email: email))
-                .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
-                .foregroundStyle(color)
-                .frame(width: size, height: size)
-                .background(color.opacity(0.15), in: Circle())
-        }
+        // Initials always, with the photo on top when there's a real one. A missing or broken photo leaves the initials.
+        let color = Theme.color(for: email)
+        Text(Addresses.initials(name: name, email: email))
+            .font(.system(size: size * 0.38, weight: .semibold, design: .rounded))
+            .foregroundStyle(color)
+            .frame(width: size, height: size)
+            .background(color.opacity(0.15), in: Circle())
+            .overlay {
+                if let photo = photos.image(for: email) {
+                    Image(nsImage: photo)
+                        .resizable()
+                        .interpolation(.high)
+                        .scaledToFill()
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                }
+            }
     }
 }
 

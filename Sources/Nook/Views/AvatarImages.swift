@@ -28,11 +28,17 @@ final class AvatarImages: ObservableObject {
         let key = email.lowercased()
         if let image = images[key] { return image }
         guard let store, !missing.contains(key) else { return nil }
-        guard let data = store.image(for: key), let image = NSImage(data: data) else {
+        guard let data = store.image(for: key), let image = NSImage(data: data), Self.isRealImage(image) else {
             missing.insert(key)
             return nil
         }
         images[key] = image
         return image
+    }
+
+    /// Something that decodes to actual pixels, not an empty or 1×1 placeholder.
+    static func isRealImage(_ image: NSImage) -> Bool {
+        guard image.isValid, image.size.width >= 8, image.size.height >= 8 else { return false }
+        return image.representations.contains { $0.pixelsWide >= 8 && $0.pixelsHigh >= 8 }
     }
 }
