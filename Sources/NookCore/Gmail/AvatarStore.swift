@@ -63,24 +63,24 @@ public final class AvatarStore: @unchecked Sendable {
     ) async -> Set<String> {
         let todo = Array(outdated(photos))
         var updated: Set<String> = []
-        await withTaskGroup(of: String?.self) { group in
-            var next = todo.makeIterator()
-            func addNext() -> Bool {
-                guard let (email, url) = next.next() else { return false }
-                group.addTask { [self] in
-                    // Photo links are public and need no sign-in.
-                    guard let (data, response) = try? await transport.send(URLRequest(url: url)),
-                          response.statusCode == 200, !data.isEmpty, data.count < 1_000_000,
-                          (try? save(data, for: email, from: url)) != nil else { return nil }
-                    return email
+        // In batches, so a few downloads run at once without a long-lived task group.
+        for start in stride(from: 0, to: todo.count, by: max(1, concurrent)) {
+            let batch = todo[start..<min(start + max(1, concurrent), todo.count)]
+            let saved = await withTaskGroup(of: String?.self, returning: [String].self) { group in
+                for (email, url) in batch {
+                    group.addTask { [self] in
+                        // Photo links are public and need no sign-in.
+                        guard let (data, response) = try? await transport.send(URLRequest(url: url)),
+                              response.statusCode == 200, !data.isEmpty, data.count < 1_000_000,
+                              (try? save(data, for: email, from: url)) != nil else { return nil }
+                        return email
+                    }
                 }
-                return true
+                var saved: [String] = []
+                for await email in group { if let email { saved.append(email) } }
+                return saved
             }
-            for _ in 0..<concurrent where addNext() {}
-            for await email in group {
-                if let email { updated.insert(email) }
-                _ = addNext()
-            }
+            updated.formUnion(saved)
         }
         return updated
     }

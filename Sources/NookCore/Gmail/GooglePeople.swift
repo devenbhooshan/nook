@@ -154,24 +154,18 @@ public enum PhotoSync {
 
     public static func run(directories: [String: PhotoDirectory]) async -> Result {
         var result = Result()
-        await withTaskGroup(of: (String, Swift.Result<[String: URL], Error>).self) { group in
-            for (account, directory) in directories {
-                group.addTask {
-                    do { return (account, .success(try await directory.photoURLs())) } catch { return (account, .failure(error)) }
-                }
-            }
-            for await (account, outcome) in group {
-                switch outcome {
-                case .success(let photos):
-                    result.access[account] = .available
-                    result.photos.merge(photos) { first, _ in first }
-                case .failure(PeopleError.needsPermission):
-                    result.access[account] = .needsPermission
-                case .failure(PeopleError.apiDisabled(let link)):
-                    result.access[account] = .apiDisabled(link)
-                case .failure:
-                    break
-                }
+        // One account at a time: there are only a few, and each is a handful of requests.
+        for (account, directory) in directories.sorted(by: { $0.key < $1.key }) {
+            do {
+                let photos = try await directory.photoURLs()
+                result.access[account] = .available
+                result.photos.merge(photos) { first, _ in first }
+            } catch PeopleError.needsPermission {
+                result.access[account] = .needsPermission
+            } catch PeopleError.apiDisabled(let link) {
+                result.access[account] = .apiDisabled(link)
+            } catch {
+                continue
             }
         }
         return result
