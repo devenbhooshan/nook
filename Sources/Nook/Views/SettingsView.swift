@@ -147,6 +147,9 @@ private struct AccountsSettings: View {
     }
 
     private func status(for account: Account) -> String {
+        if store.expiredSignIns.contains(account.email) {
+            return "Google ended this sign-in, so it isn't syncing. While your Google Cloud app is in Testing, Google ends sign-ins after 7 days."
+        }
         if store.needsSignIn(account.email) {
             return store.hasGoogleClient
                 ? "Signed out. Sign in again to resume syncing. Your mail stays on this Mac."

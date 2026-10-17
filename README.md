@@ -66,7 +66,9 @@ On first launch, Nook walks you through three steps: **connect mail**, **choose 
 Nook uses your own OAuth client, so no third party is ever involved. This takes about five minutes, once:
 
 1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project, then go to **APIs & Services → Library** and **enable the Gmail API** and the **People API** (for senders' profile photos).
-2. Under **Google Auth Platform → Audience**, keep the user type **External** and the status **Testing**. Under **Test users**, click **Add users** and add *every* address you'll connect. Only test users can sign in while the app is in Testing.
+2. Under **Google Auth Platform → Audience**, keep the user type **External**. Then either:
+   - click **Publish app** (recommended). Your client stays unverified, which is fine for your own use: Google shows a warning when you sign in, and sign-ins last until you revoke them; or
+   - keep the status **Testing** and, under **Test users**, add *every* address you'll connect. In Testing, **Google ends every sign-in after 7 days**, and Nook will ask you to sign in again each week.
 3. Under **Clients** (or **Credentials → Create credentials → OAuth client ID**), create a client with application type **Desktop app**. The Scopes step is optional: Nook asks for what it needs when you sign in.
 4. Paste the client ID and secret into Nook (on the welcome screen, or later in **Settings → Accounts**) and click **Connect Gmail**.
 

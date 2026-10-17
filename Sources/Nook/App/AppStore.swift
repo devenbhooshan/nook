@@ -62,7 +62,7 @@ final class AppStore: ObservableObject {
     /// Accounts that have to be signed in again: their sign-in is missing (a Keychain reset, say) or Google ended it.
     @Published private(set) var signedOutAccounts: [String] = []
     /// Accounts whose sign-in Google revoked or expired, found by a failed sync.
-    private var expiredSignIns: Set<String> = []
+    @Published private(set) var expiredSignIns: Set<String> = []
     /// Whether each account lets Nook fetch profile photos.
     @Published private(set) var photoAccess: [String: PhotoAccess] = [:]
     private var photosRefreshed: Date?
