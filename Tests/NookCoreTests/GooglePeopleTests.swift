@@ -173,3 +173,49 @@ struct AvatarStoreTests {
         #expect(store.outdated(photos).count == 1)
     }
 }
+
+@Suite("Brand logos")
+struct BrandLogosTests {
+    struct FakeDNS: TXTResolver {
+        var records: [String: [String]]
+        func txt(_ name: String) async -> [String] { records[name] ?? [] }
+    }
+
+    @Test func readsTheLogoFromABIMIRecord() {
+        #expect(BrandLogos.logoURL(fromRecords: ["v=BIMI1;l=https://www.apple.com/bimi/v2/apple.svg;a=https://www.apple.com/bimi/v2/apple.pem;"])
+            == URL(string: "https://www.apple.com/bimi/v2/apple.svg"))
+        #expect(BrandLogos.logoURL(fromRecords: ["v=spf1 include:_spf.google.com ~all", "v=BIMI1; l= https://x.com/l.svg"]) == URL(string: "https://x.com/l.svg"))
+        // Not BIMI, no logo, or not HTTPS.
+        #expect(BrandLogos.logoURL(fromRecords: ["v=BIMI1; l=;"]) == nil)
+        #expect(BrandLogos.logoURL(fromRecords: ["v=BIMI1; l=http://x.com/l.svg"]) == nil)
+        #expect(BrandLogos.logoURL(fromRecords: []) == nil)
+    }
+
+    @Test func triesTheSendingDomainThenItsParents() {
+        #expect(BrandLogos.candidates(for: "Email.Apple.com") == ["email.apple.com", "apple.com"])
+        #expect(BrandLogos.candidates(for: "stripe.com") == ["stripe.com"])
+        #expect(BrandLogos.candidates(for: "localhost").isEmpty)
+        #expect(BrandLogos.domain(of: "no_reply@email.apple.com") == "email.apple.com")
+        #expect(BrandLogos.domain(of: "nobody") == nil)
+    }
+
+    @Test func downloadsLogosIntoThePhotoStore() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("nook-logos-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AvatarStore(directory: directory)
+        let dns = FakeDNS(records: ["default._bimi.apple.com": ["v=BIMI1;l=https://www.apple.com/logo.svg;"]])
+        let server = PhotoServer(["https://www.apple.com/logo.svg": [.init(200, "<svg/>")]])
+
+        let updated = await BrandLogos.refresh(domains: ["email.apple.com", "stripe.com"], store: store, dns: dns, transport: server)
+        #expect(updated == ["email.apple.com"])
+        #expect(store.image(for: BrandLogos.key(for: "email.apple.com")) == Data("<svg/>".utf8))
+        #expect(store.image(for: BrandLogos.key(for: "stripe.com")) == nil)
+    }
+
+    @Test func theSystemResolverFindsARealRecordOrGivesUpQuietly() async {
+        // Needs the network; an offline run just finds nothing, which is what the app does too.
+        let records = await SystemDNS(timeout: 3).txt("default._bimi.apple.com")
+        if !records.isEmpty { #expect(BrandLogos.logoURL(fromRecords: records) != nil) }
+        #expect(await SystemDNS(timeout: 3).txt("default._bimi.no-such-domain.invalid").isEmpty)
+    }
+}

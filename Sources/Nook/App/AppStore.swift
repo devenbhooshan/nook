@@ -618,11 +618,26 @@ final class AppStore: ObservableObject {
             guard let tokens = secrets.tokens(for: email) else { continue }
             directories[email] = GooglePeople(tokens: OAuthTokenProvider(email: email, tokens: tokens, config: config, store: secrets))
         }
+        let brandLogos = defaults.bool(forKey: BrandLogos.enabledKey)
+        let domains = brandLogos ? repo.senderDomains() : []
         Task {
             let result = await PhotoSync.run(directories: directories)
             photoAccess = result.access
-            let updated = await avatars.download(result.photos)
+            var updated = await avatars.download(result.photos)
+            if brandLogos {
+                let logos = await BrandLogos.refresh(domains: domains, store: avatars)
+                updated.formUnion(logos.map(BrandLogos.key(for:)))
+            }
             AvatarImages.shared.loaded(avatars, updated: updated)
+        }
+    }
+
+    /// Turns brand logos on or off. Turning them on fetches them now rather than at the next daily refresh.
+    func setBrandLogos(_ enabled: Bool) {
+        AvatarImages.shared.brandLogosChanged()
+        if enabled {
+            photosRefreshed = nil
+            refreshPhotosIfDue()
         }
     }
 

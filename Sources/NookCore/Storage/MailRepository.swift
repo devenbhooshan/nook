@@ -126,6 +126,18 @@ public final class MailRepository: @unchecked Sendable {
         ((try? reader.query("SELECT 1 AS x FROM threads LIMIT 1")) ?? []).isEmpty == false
     }
 
+    /// The domains that send you the most mail, for brand logos.
+    public func senderDomains(limit: Int = 400) -> [String] {
+        let rows = (try? reader.query(
+            """
+            SELECT lower(substr(from_email, instr(from_email, '@') + 1)) AS domain, COUNT(*) AS n FROM messages
+            WHERE instr(from_email, '@') > 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%'
+            GROUP BY domain ORDER BY n DESC LIMIT ?
+            """, [limit]
+        )) ?? []
+        return rows.map { $0.string("domain") }.filter { $0.contains(".") }
+    }
+
     /// Who has written to you and whom you've written to, for recipient suggestions.
     public func contactHistory() -> ContactHistory {
         // With a single MAX(), SQLite takes the bare from_name from the newest message: the sender's latest name.

@@ -24,8 +24,19 @@ final class AvatarImages: ObservableObject {
         if first || !updated.isEmpty { version += 1 }
     }
 
+    /// The person's photo, or with brand logos turned on, their company's logo.
     func image(for email: String) -> NSImage? {
-        let key = email.lowercased()
+        if let photo = cached(email.lowercased()) { return photo }
+        guard UserDefaults.standard.bool(forKey: BrandLogos.enabledKey), let domain = BrandLogos.domain(of: email) else { return nil }
+        return cached(BrandLogos.key(for: domain))
+    }
+
+    /// Brand logos were turned on or off: redraw avatars.
+    func brandLogosChanged() {
+        version += 1
+    }
+
+    private func cached(_ key: String) -> NSImage? {
         if let image = images[key] { return image }
         guard let store, !missing.contains(key) else { return nil }
         guard let data = store.image(for: key), let image = NSImage(data: data), Self.isRealImage(image) else {
@@ -36,9 +47,10 @@ final class AvatarImages: ObservableObject {
         return image
     }
 
-    /// Something that decodes to actual pixels, not an empty or 1×1 placeholder.
+    /// Something that draws: a vector image (brand logos are SVG) or a bitmap bigger than a 1×1 placeholder.
     static func isRealImage(_ image: NSImage) -> Bool {
         guard image.isValid, image.size.width >= 8, image.size.height >= 8 else { return false }
-        return image.representations.contains { $0.pixelsWide >= 8 && $0.pixelsHigh >= 8 }
+        // Vector images report no pixels.
+        return image.representations.contains { ($0.pixelsWide >= 8 && $0.pixelsHigh >= 8) || $0.pixelsWide == 0 }
     }
 }

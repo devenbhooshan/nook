@@ -224,6 +224,7 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | Database encryption key | macOS Keychain, created on first launch, this device only |
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
 | Senders' profile photos | `~/Library/Caches/com.devenbhooshan.nook/Avatars`, downloaded once from Google, files named by a hash of the address |
+| Company logos (off by default) | Same folder. With **Settings → Privacy → Show company logos** on, Nook looks up each sender's domain in DNS (BIMI) and downloads its logo from the company's own server |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
 | MCP | No network at all: stdio to the client that launches `nook-mcp` |

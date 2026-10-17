@@ -399,7 +399,9 @@ private struct IntegrationsSettings: View {
 }
 
 private struct PrivacySettings: View {
+    @EnvironmentObject private var store: AppStore
     @AppStorage("privacy.blockRemoteContent") private var blockRemoteContent = true
+    @AppStorage(BrandLogos.enabledKey) private var brandLogos = false
 
     var body: some View {
         Form {
@@ -407,6 +409,12 @@ private struct PrivacySettings: View {
                 Toggle("Block remote images and content", isOn: $blockRemoteContent)
             } footer: {
                 Text("Remote images often act as tracking pixels that report when, where and on what device you opened a message. When blocked, you can still load them for one conversation.")
+            }
+            Section {
+                Toggle("Show company logos for senders", isOn: $brandLogos)
+                    .onChange(of: brandLogos) { _, enabled in store.setBrandLogos(enabled) }
+            } footer: {
+                Text("Uses BIMI: Nook looks up each sender's domain in DNS and downloads the logo from the company's own server, once. That company can see the request. Off by default.")
             }
             Section("Where your data lives") {
                 LabeledContent("Mail and tags") {

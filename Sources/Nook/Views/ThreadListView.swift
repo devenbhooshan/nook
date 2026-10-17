@@ -12,6 +12,7 @@ struct ThreadListView: View {
             } trailing: {
                 searchField
                 IconButton(systemImage: "square.and.pencil", title: "New message", shortcut: "C", tooltipAlignment: .trailing) { store.compose() }
+                IconButton(systemImage: "gearshape", title: "Settings", shortcut: "⌘,", tooltipAlignment: .trailing) { store.openSettings() }
             }
 
             ContentColumn {
