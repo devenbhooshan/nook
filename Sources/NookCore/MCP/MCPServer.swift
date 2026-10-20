@@ -191,6 +191,8 @@ public final class MCPServer {
                     "body": body.count > Self.maxBodyCharacters ? String(body.prefix(Self.maxBodyCharacters)) + "\n[truncated]" : body,
                     "unread": message.isUnread,
                     "tags": repo.tags(account: account, messageId: message.id),
+                    // Names only. The files themselves never leave Nook.
+                    "attachments": message.listedAttachments.map { ["filename": $0.filename, "type": $0.mimeType, "size": $0.size] as [String: Any] },
                 ]
             },
         ]

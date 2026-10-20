@@ -18,7 +18,8 @@ struct ReplyComposerTests {
         #expect(draft.threadId == "T")
         #expect(draft.inReplyTo == "<1@mail.example.com>")
         #expect(draft.references == "<root@x>")
-        #expect(draft.body.contains("Anna wrote:\n> Line one\n> Line two"))
+        #expect(draft.body.isEmpty)
+        #expect(draft.quoted.contains("Anna wrote:\n> Line one\n> Line two"))
     }
 
     @Test func replyHonorsReplyTo() {
@@ -51,8 +52,8 @@ struct ReplyComposerTests {
         #expect(draft.to.isEmpty)
         #expect(draft.subject == "Fwd: Deck")
         #expect(draft.threadId == nil)
-        #expect(draft.body.contains("From: Anna <anna@x.com>"))
-        #expect(draft.body.hasSuffix("See attached"))
+        #expect(draft.quoted.contains("From: Anna <anna@x.com>"))
+        #expect(draft.quoted.hasSuffix("See attached"))
     }
 }
 

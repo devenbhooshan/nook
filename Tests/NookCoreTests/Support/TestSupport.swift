@@ -128,6 +128,13 @@ actor FakeGmail: GmailService {
     func updateDraft(id: String, raw: String, threadId: String?) async throws {}
     func sendDraft(id: String) async throws {}
 
+    var attachmentData: [String: Data] = [:]
+    func setAttachment(_ id: String, data: Data) { attachmentData[id] = data }
+    func attachment(messageId: String, attachmentId: String) async throws -> Data {
+        guard let data = attachmentData[attachmentId] else { throw GmailError.notFound }
+        return data
+    }
+
     func resetCounters() {
         fullFetches = []
         minimalFetches = []

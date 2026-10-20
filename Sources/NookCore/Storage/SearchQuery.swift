@@ -3,6 +3,7 @@ import Foundation
 /// A parsed search string. Supports free text plus Gmail-style operators:
 ///
 ///     from:anna  to:me  tag:receipt  is:unread  is:starred  in:sent  account:work  "exact phrase"
+///     has:attachment  filename:pdf
 public struct SearchQuery: Equatable, Sendable {
     public var terms: [String] = []
     public var from: [String] = []
@@ -12,6 +13,8 @@ public struct SearchQuery: Equatable, Sendable {
     public var isUnread: Bool?
     public var isStarred: Bool?
     public var mailbox: Mailbox?
+    public var hasAttachment = false
+    public var filenames: [String] = []
 
     public init() {}
 
@@ -37,6 +40,13 @@ public struct SearchQuery: Equatable, Sendable {
             case "to": query.to.append(value)
             case "tag", "label": query.tags.append(value)
             case "account": query.accounts.append(value)
+            case "filename": query.filenames.append(value)
+            case "has":
+                if ["attachment", "attachments", "file", "files"].contains(value.lowercased()) {
+                    query.hasAttachment = true
+                } else {
+                    query.terms.append(token)
+                }
             case "is":
                 switch value.lowercased() {
                 case "unread": query.isUnread = true

@@ -6,6 +6,7 @@ import SwiftUI
 extension Notification.Name {
     static let nookDataChanged = Notification.Name("NookDataChanged")
     static let nookTaggerStatus = Notification.Name("NookTaggerStatus")
+    static let nookDemoAttach = Notification.Name("NookDemoAttach")
 }
 
 struct Toast: Identifiable, Equatable {
@@ -126,6 +127,13 @@ final class AppStore: ObservableObject {
     private let tagger: Tagger
     let isDemo: Bool
     private var sendingDrafts: Set<UUID> = []
+    /// Fetches, previews and saves attachments.
+    lazy var attachmentFiles = AttachmentFiles { [sync] ref in
+        try await sync.service(for: ref.account).data(for: ref.attachment, messageId: ref.messageId)
+    }
+    /// The file Quick Look is showing, and the files it can page through.
+    @Published var quickLookURL: URL?
+    @Published private(set) var quickLookItems: [URL] = []
     /// The previous mail store couldn't be unlocked and was set aside; mail downloads again.
     var startedWithFreshStore = false
     private var demoOnboardingCompleted: Bool? = true
@@ -214,6 +222,7 @@ final class AppStore: ObservableObject {
         guard !started else { return }
         started = true
         Self.current = self
+        AttachmentFiles.clearTemporaryFiles()
         loadAccounts()
         upgradeTagsIfNeeded()
         tags = repo.tags()
@@ -477,6 +486,19 @@ final class AppStore: ObservableObject {
         openThread = thread
         openMessages = repo.threadMessages(account: thread.account, threadId: thread.threadId)
         if thread.isUnread { markRead(thread) }
+        fillInAttachments(thread)
+    }
+
+    /// Mail stored before Nook kept attachments is fetched again when it's opened, so its files show up.
+    private func fillInAttachments(_ thread: ThreadSummary) {
+        let missing = repo.messagesMissingAttachments(account: thread.account, threadId: thread.threadId)
+        guard !missing.isEmpty, !isDemo else { return }
+        let sync = sync
+        Task {
+            try? await sync.fillInAttachments(account: thread.account, ids: missing)
+            guard openThread?.id == thread.id else { return }
+            openMessages = repo.threadMessages(account: thread.account, threadId: thread.threadId)
+        }
     }
 
     func closeThread() {
@@ -917,6 +939,19 @@ final class AppStore: ObservableObject {
 
     /// Opens a Gmail draft to finish. A reply draft stays in its conversation.
     private func openGmailDraft(_ row: ThreadSummary) {
+        // Saving rewrites the draft, so its attachments have to be known first or they'd be dropped.
+        if !isDemo, repo.message(account: row.account, id: row.latestMessageId)?.attachments.isEmpty == true,
+           !repo.messagesMissingAttachments(account: row.account, threadId: row.threadId).isEmpty {
+            let sync = sync
+            Task {
+                try? await sync.fillInAttachments(account: row.account, ids: [row.latestMessageId])
+                if repo.messagesMissingAttachments(account: row.account, threadId: row.threadId).contains(row.latestMessageId) {
+                    return showToast("Couldn't load this draft's attachments. Try again in a moment.", isError: true)
+                }
+                openGmailDraft(row)
+            }
+            return
+        }
         guard let message = repo.message(account: row.account, id: row.latestMessageId) else { return }
         let isReply = !repo.threadMessages(account: row.account, threadId: message.threadId).isEmpty
         let references = message.references.trimmingCharacters(in: .whitespaces)
@@ -925,7 +960,8 @@ final class AppStore: ObservableObject {
             threadId: isReply ? message.threadId : nil,
             inReplyTo: references.split(separator: " ").last.map(String.init),
             references: references.isEmpty ? nil : references,
-            gmailDraftMessageId: message.id
+            gmailDraftMessageId: message.id,
+            attachments: message.listedAttachments.map { OutgoingAttachment(forwarding: $0, account: row.account, messageId: message.id) }
         ))
     }
 
@@ -933,11 +969,12 @@ final class AppStore: ObservableObject {
     func saveDraft(_ draft: Draft) {
         guard let messageId = draft.gmailDraftMessageId else { return }
         self.draft = nil
-        let raw = MIMEBuilder.gmailRaw(draft, fromName: account(for: draft.from)?.name ?? "")
+        let name = account(for: draft.from)?.name ?? ""
         let sync = sync
         Task {
             do {
                 let service = try await sync.service(for: draft.from)
+                let raw = try await rawMessage(draft, fromName: name)
                 guard let id = try await service.draftID(messageId: messageId) else {
                     return showToast("That draft was sent or deleted elsewhere.", isError: true)
                 }
@@ -959,7 +996,25 @@ final class AppStore: ObservableObject {
         guard let thread = currentThread else { return }
         let messages = openThread?.id == thread.id ? openMessages : repo.threadMessages(account: thread.account, threadId: thread.threadId)
         guard let latest = messages.last else { return }
-        openDraft(ReplyComposer.draft(kind, to: latest, account: thread.account))
+        var draft = ReplyComposer.draft(kind, to: latest, account: thread.account)
+        if kind == .forward {
+            // Forwarding keeps the files. They're fetched from Gmail when you press Send.
+            draft.attachments = latest.listedAttachments.map { OutgoingAttachment(forwarding: $0, account: thread.account, messageId: latest.id) }
+        }
+        openDraft(draft)
+    }
+
+    /// The message ready for Gmail. Files still in Gmail are fetched, and the encoding runs off the main thread.
+    private func rawMessage(_ draft: Draft, fromName: String) async throws -> String {
+        var resolved = draft
+        for index in resolved.attachments.indices {
+            if case let .gmail(account, messageId, attachment) = resolved.attachments[index].source {
+                let data = try await attachmentFiles.data(AttachmentRef(attachment: attachment, account: account, messageId: messageId))
+                resolved.attachments[index].source = .data(data)
+            }
+        }
+        let ready = resolved
+        return await Task.detached(priority: .userInitiated) { MIMEBuilder.gmailRaw(ready, fromName: fromName) }.value
     }
 
     func send(_ draft: Draft) {
@@ -968,12 +1023,12 @@ final class AppStore: ObservableObject {
         sendingDrafts.insert(draft.id)
         self.draft = nil
         let name = account(for: draft.from)?.name ?? ""
-        let raw = MIMEBuilder.gmailRaw(draft, fromName: name)
         showToast("Sending…")
         let sync = sync
         Task {
             do {
                 let service = try await sync.service(for: draft.from)
+                let raw = try await rawMessage(draft, fromName: name)
                 // A Gmail draft is sent as that draft, so it leaves Drafts everywhere instead of lingering there.
                 if let messageId = draft.gmailDraftMessageId, let id = try await service.draftID(messageId: messageId) {
                     try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
@@ -1013,7 +1068,7 @@ final class AppStore: ObservableObject {
             let messages = repo.threadMessages(account: account, threadId: threadId)
             guard let latest = messages.last else { return showToast("That conversation isn't on this Mac.", isError: true) }
             var reply = ReplyComposer.draft(all ? .replyAll : .reply, to: latest, account: account)
-            reply.body = body + reply.body
+            reply.body = body
             openDraft(reply)
         case let .open(account, threadId):
             guard let thread = repo.thread(account: account, threadId: threadId) else {
@@ -1035,6 +1090,75 @@ final class AppStore: ObservableObject {
                 withAnimation(.easeOut(duration: 0.2)) { self.toast = nil }
                 if undoAction?.id == toast.id { undoAction = nil }
             }
+        }
+    }
+
+    // MARK: Attachments
+
+    /// The attachments listed in the open conversation, oldest message first.
+    var openAttachments: [AttachmentRef] {
+        openMessages.flatMap { message in
+            message.listedAttachments.map { AttachmentRef(attachment: $0, account: message.account, messageId: message.id) }
+        }
+    }
+
+    /// Shows a file in Quick Look. The arrow keys page through the conversation's other files once they're fetched.
+    func quickLook(_ ref: AttachmentRef) {
+        Task {
+            do {
+                let url = try await attachmentFiles.temporaryFile(ref)
+                quickLookItems = [url]
+                quickLookURL = url
+                // Fetch the rest in the background so Quick Look can page through them.
+                var items: [URL] = []
+                for other in openAttachments {
+                    if let file = try? await attachmentFiles.temporaryFile(other) { items.append(file) }
+                }
+                if quickLookURL == url, items.contains(url) { quickLookItems = items }
+            } catch {
+                showToast("Couldn't open \(ref.attachment.filename): \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func openAttachment(_ ref: AttachmentRef) {
+        Task {
+            do {
+                NSWorkspace.shared.open(try await attachmentFiles.temporaryFile(ref))
+            } catch {
+                showToast("Couldn't open \(ref.attachment.filename): \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func saveAttachments(_ refs: [AttachmentRef]) {
+        guard !refs.isEmpty else { return }
+        Task {
+            do {
+                let saved = try await attachmentFiles.saveToDownloads(refs)
+                showToast(saved.count == 1 ? "Saved \(saved[0].lastPathComponent) to Downloads" : "Saved \(saved.count) files to Downloads")
+            } catch {
+                showToast("Couldn't save: \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func saveAttachmentAs(_ ref: AttachmentRef) {
+        Task {
+            do {
+                if let url = try await attachmentFiles.saveWithPanel(ref) { showToast("Saved \(url.lastPathComponent)") }
+            } catch {
+                showToast("Couldn't save: \(error.localizedDescription)", isError: true)
+            }
+        }
+    }
+
+    func revealAttachment(_ ref: AttachmentRef) {
+        Task {
+            guard let urls = try? await attachmentFiles.saveToDownloads([ref]) else {
+                return showToast("Couldn't save \(ref.attachment.filename)", isError: true)
+            }
+            NSWorkspace.shared.activateFileViewerSelecting(urls)
         }
     }
 
@@ -1065,6 +1189,16 @@ final class AppStore: ObservableObject {
                 },
                 PaletteCommand(title: "Move to Trash", section: "Conversation", systemImage: "trash", shortcut: "#") { [weak self] in self?.trash() },
             ]
+            let files = openAttachments
+            if let first = files.first {
+                commands += [
+                    PaletteCommand(title: "Quick Look attachments", section: "Conversation", systemImage: "eye", shortcut: nil) { [weak self] in self?.quickLook(first) },
+                    PaletteCommand(
+                        title: files.count == 1 ? "Save attachment to Downloads" : "Save all attachments to Downloads",
+                        section: "Conversation", systemImage: "arrow.down.circle", shortcut: nil
+                    ) { [weak self] in self?.saveAttachments(files) },
+                ]
+            }
         }
         commands += [
             PaletteCommand(title: "New message", section: "General", systemImage: "square.and.pencil", shortcut: "C") { [weak self] in self?.compose() },

@@ -89,6 +89,11 @@ public struct MailMessage: Identifiable, Hashable, Sendable {
     /// The RFC 5322 `Message-ID` header, used for threading replies.
     public var messageIdHeader: String
     public var references: String
+    /// Files sent with the message, including images shown inside an HTML body.
+    public var attachments: [Attachment]
+
+    /// The attachments to list under the message. Images the body already shows aren't listed again.
+    public var listedAttachments: [Attachment] { attachments.filter { !$0.isInline } }
 
     public var isUnread: Bool { labels.contains(SystemLabel.unread) }
     public var isStarred: Bool { labels.contains(SystemLabel.starred) }
@@ -98,8 +103,10 @@ public struct MailMessage: Identifiable, Hashable, Sendable {
         fromName: String = "", fromEmail: String = "", replyTo: String = "",
         to: String = "", cc: String = "", subject: String = "", snippet: String = "",
         bodyHTML: String = "", bodyText: String = "", date: Date = Date(),
-        labels: Set<String> = [], messageIdHeader: String = "", references: String = ""
+        labels: Set<String> = [], messageIdHeader: String = "", references: String = "",
+        attachments: [Attachment] = []
     ) {
+        self.attachments = attachments
         self.id = id
         self.account = account
         self.threadId = threadId
@@ -134,12 +141,14 @@ public struct ThreadSummary: Identifiable, Hashable, Sendable {
     public var isUnread: Bool
     public var isStarred: Bool
     public var tags: [String]
+    public var hasAttachments: Bool
 
     public init(
         account: String, threadId: String, latestMessageId: String, fromName: String, fromEmail: String,
         subject: String, snippet: String, date: Date, messageCount: Int, isUnread: Bool, isStarred: Bool,
-        tags: [String]
+        tags: [String], hasAttachments: Bool = false
     ) {
+        self.hasAttachments = hasAttachments
         self.account = account
         self.threadId = threadId
         self.latestMessageId = latestMessageId
@@ -196,11 +205,23 @@ public struct Draft: Identifiable, Hashable, Sendable {
     public var references: String?
     /// The Gmail draft this was opened from, by its message id. Sending sends that draft; saving updates it.
     public var gmailDraftMessageId: String?
+    public var attachments: [OutgoingAttachment]
+    /// The message being replied to or forwarded. Kept out of the editor and added below what you write when sending.
+    public var quoted: String = ""
+
+    /// What's sent: your text, then the quoted message.
+    public var fullBody: String {
+        guard !quoted.isEmpty else { return body }
+        let mine = body.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        return mine.isEmpty ? quoted : mine + "\n\n" + quoted
+    }
 
     public init(
         from: String, to: String = "", cc: String = "", subject: String = "", body: String = "",
-        threadId: String? = nil, inReplyTo: String? = nil, references: String? = nil, gmailDraftMessageId: String? = nil
+        threadId: String? = nil, inReplyTo: String? = nil, references: String? = nil, gmailDraftMessageId: String? = nil,
+        attachments: [OutgoingAttachment] = []
     ) {
+        self.attachments = attachments
         self.gmailDraftMessageId = gmailDraftMessageId
         self.from = from
         self.to = to
@@ -211,4 +232,74 @@ public struct Draft: Identifiable, Hashable, Sendable {
         self.inReplyTo = inReplyTo
         self.references = references
     }
+}
+
+/// A file that came with a message. The bytes stay in Gmail until you open or save it.
+public struct Attachment: Identifiable, Hashable, Sendable, Codable {
+    public var id: String { partId }
+    /// Where the file sits in the message's MIME tree, like "1.2". Unique within a message.
+    public var partId: String
+    public var filename: String
+    public var mimeType: String
+    /// Size in bytes, as Gmail reports it.
+    public var size: Int
+    /// Gmail's handle for fetching the bytes. Small parts have none; their bytes come with the message.
+    public var attachmentId: String?
+    /// The `Content-ID` an HTML body uses to show the file inline, without angle brackets.
+    public var contentId: String?
+    /// Shown inside the body (a pasted screenshot, a logo in a signature) rather than as a file to open.
+    public var isInline: Bool
+
+    public init(
+        partId: String, filename: String, mimeType: String, size: Int,
+        attachmentId: String? = nil, contentId: String? = nil, isInline: Bool = false
+    ) {
+        self.partId = partId
+        self.filename = filename
+        self.mimeType = mimeType
+        self.size = size
+        self.attachmentId = attachmentId
+        self.contentId = contentId
+        self.isInline = isInline
+    }
+
+    public var isImage: Bool { mimeType.lowercased().hasPrefix("image/") }
+}
+
+/// A file going out with a draft.
+public struct OutgoingAttachment: Identifiable, Hashable, Sendable {
+    public enum Source: Hashable, Sendable {
+        /// Bytes already on this Mac: a file you picked or dropped.
+        case data(Data)
+        /// A file still in Gmail, from the message being forwarded or the draft being finished. Fetched when sending.
+        case gmail(account: String, messageId: String, attachment: Attachment)
+    }
+
+    public var id = UUID()
+    public var filename: String
+    public var mimeType: String
+    public var size: Int
+    public var source: Source
+
+    public init(filename: String, mimeType: String, data: Data) {
+        self.filename = filename
+        self.mimeType = mimeType
+        self.size = data.count
+        self.source = .data(data)
+    }
+
+    public init(forwarding attachment: Attachment, account: String, messageId: String) {
+        self.filename = attachment.filename
+        self.mimeType = attachment.mimeType
+        self.size = attachment.size
+        self.source = .gmail(account: account, messageId: messageId, attachment: attachment)
+    }
+
+    public var data: Data? {
+        if case .data(let data) = source { return data }
+        return nil
+    }
+
+    /// Gmail refuses messages whose attachments add up to more than 25 MB.
+    public static let gmailLimit = 25 * 1024 * 1024
 }

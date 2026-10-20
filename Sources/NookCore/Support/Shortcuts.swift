@@ -145,6 +145,7 @@ public struct ShortcutInterpreter: Sendable {
             Entry(keys: "f", title: "Forward"),
             Entry(keys: "⌘↵", title: "Send"),
             Entry(keys: "⌘⇧F", title: "Send from the next account"),
+            Entry(keys: "⌘⇧A", title: "Attach files"),
         ]),
         Section(title: "Go to", entries: [
             Entry(keys: "g i", title: "Inbox"),

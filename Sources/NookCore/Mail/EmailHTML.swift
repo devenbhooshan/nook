@@ -20,11 +20,35 @@ public enum EmailHTML {
         if message.bodyHTML.isEmpty {
             return """
             <!doctype html><html><head>\(head)<style>\(plainTextStyle)</style></head>
-            <body><div class="nook-plain">\(linkify(escape(message.bodyText)))</div></body></html>
+            <body><div class="nook-plain">\(plainBody(message.bodyText))</div></body></html>
             """
         }
         // The CSP meta tag goes first so the parser places it in <head> before any remote reference.
         return head + "<style>\(htmlStyle)</style>" + message.bodyHTML
+    }
+
+    /// Plain text as HTML, with a trailing quote ("On … wrote:" and the "> " lines after it) marked so the reader
+    /// can fold it away.
+    static func plainBody(_ text: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
+        var start = lines.count
+        while start > 0 {
+            let line = lines[start - 1].trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix(">") || line.isEmpty else { break }
+            start -= 1
+        }
+        while start < lines.count, lines[start].trimmingCharacters(in: .whitespaces).isEmpty { start += 1 }
+        guard start < lines.count else { return linkify(escape(text)) }
+        // Take the "On … wrote:" line (sometimes wrapped onto two) along with the quote.
+        if start > 0, lines[start - 1].hasSuffix("wrote:") {
+            start -= 1
+            if start > 0, lines[start - 1].hasPrefix("On "), !lines[start].hasPrefix("On ") { start -= 1 }
+        }
+        let own = lines[..<start].joined(separator: "\n")
+        let quote = lines[start...].joined(separator: "\n")
+        guard !own.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return linkify(escape(text)) }
+        return linkify(escape(own)) + "<div class=\"nook-quote\">" + linkify(escape(quote)) + "</div>"
     }
 
     /// Whether the HTML would load anything from the network.

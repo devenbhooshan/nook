@@ -1,4 +1,5 @@
 import NookCore
+import QuickLook
 import SwiftUI
 
 struct ReaderView: View {
@@ -25,7 +26,6 @@ struct ReaderView: View {
                             )
                         }
                     }
-                    replyBar
                 }
                 .background(EnclosingScrollViewReader { store.readerScrollView = $0 })
                 .frame(maxWidth: Theme.readerWidth)
@@ -34,7 +34,16 @@ struct ReaderView: View {
                 .padding(.bottom, 40)
                 .frame(maxWidth: .infinity)
             }
+            // Always in reach, however long the conversation.
+            replyBar
+                .frame(maxWidth: Theme.readerWidth)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+                .background(.bar)
+                .overlay(alignment: .top) { Divider().opacity(0.6) }
         }
+        .quickLookPreview($store.quickLookURL, in: store.quickLookItems)
     }
 
     private var current: ThreadSummary {
@@ -140,7 +149,6 @@ struct ReaderView: View {
             replyButton("Forward", key: "F", systemImage: "arrowshape.turn.up.right") { store.reply(.forward) }
             Spacer()
         }
-        .padding(.top, 4)
     }
 
     private func replyButton(_ title: String, key: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -173,6 +181,7 @@ private struct ReplyButton: View {
 }
 
 struct MessageCard: View {
+    @EnvironmentObject private var store: AppStore
     let message: MailMessage
     let startsExpanded: Bool
     let allowRemoteContent: Bool
@@ -192,7 +201,8 @@ struct MessageCard: View {
             if isExpanded {
                 EmailWebView(
                     html: MessageRenderCache.document(for: message, allowRemoteContent: allowRemoteContent),
-                    height: $bodyHeight
+                    height: $bodyHeight,
+                    inlineImage: inlineImage
                 )
                 .frame(height: bodyHeight)
                 .padding(message.bodyHTML.isEmpty ? EdgeInsets(top: 4, leading: 58, bottom: 18, trailing: 20) : EdgeInsets(top: 4, leading: 16, bottom: 16, trailing: 16))
@@ -204,6 +214,9 @@ struct MessageCard: View {
                             .padding(.horizontal, 8)
                             .padding(.bottom, 8)
                     }
+                }
+                if !message.listedAttachments.isEmpty {
+                    AttachmentStrip(message: message)
                 }
             }
         }
@@ -240,6 +253,9 @@ struct MessageCard: View {
             }
             Spacer(minLength: 8)
             HStack(spacing: 6) {
+                if !message.listedAttachments.isEmpty {
+                    Image(systemName: "paperclip").font(.system(size: 11)).foregroundStyle(.tertiary)
+                }
                 if message.isStarred {
                     Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(.yellow)
                 }
@@ -249,6 +265,21 @@ struct MessageCard: View {
             }
         }
         .padding(14)
+    }
+
+    /// Images the body shows with `cid:` links (pasted screenshots, signature logos), fetched from Gmail.
+    private var inlineImage: EmailWebView.InlineImageLoader? {
+        let inline = message.attachments.filter { $0.contentId != nil }
+        guard !inline.isEmpty else { return nil }
+        let files = store.attachmentFiles
+        let account = message.account
+        let messageId = message.id
+        return { contentId in
+            guard let attachment = inline.first(where: { $0.contentId?.caseInsensitiveCompare(contentId) == .orderedSame }),
+                  let data = try? await files.data(AttachmentRef(attachment: attachment, account: account, messageId: messageId))
+            else { return nil }
+            return (data, attachment.mimeType)
+        }
     }
 
     private var recipients: String {

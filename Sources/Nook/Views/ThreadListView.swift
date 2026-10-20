@@ -514,6 +514,9 @@ struct ThreadRow: View {
                 }
                 .fixedSize()
             }
+            if thread.hasAttachments {
+                Image(systemName: "paperclip").font(.system(size: 10.5)).foregroundStyle(.tertiary)
+            }
             if thread.isStarred {
                 Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(.yellow)
             }

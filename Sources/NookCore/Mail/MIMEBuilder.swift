@@ -3,7 +3,9 @@ import Foundation
 /// Builds RFC 5322 messages for Gmail's `messages.send`.
 public enum MIMEBuilder {
     /// The complete message as text.
-    public static func rfc822(_ draft: Draft, fromName: String, date: Date = Date()) -> String {
+    ///
+    /// Attachments must already hold their bytes (`.data`); ones still in Gmail are fetched before building.
+    public static func rfc822(_ draft: Draft, fromName: String, date: Date = Date(), boundary: String = "nook-\(UUID().uuidString)") -> String {
         // Header values come from people, from incoming mail, from nook:// links and from MCP clients. A line break
         // in any of them would start a new header (a hidden Bcc, say), so every value is forced onto one line.
         let to = singleLine(draft.to)
@@ -24,16 +26,40 @@ public enum MIMEBuilder {
             headers.append("References: \(references)")
         }
 
-        headers += [
-            "MIME-Version: 1.0",
-            "Content-Type: text/plain; charset=utf-8",
-            "Content-Transfer-Encoding: base64",
-        ]
+        headers.append("MIME-Version: 1.0")
+        let textHeaders = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"]
+        let text = base64Lines(Data(draft.fullBody.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n").utf8))
 
-        let body = Data(draft.body.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n").utf8)
-            .base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
+        let files = draft.attachments.compactMap { attachment in attachment.data.map { (attachment, $0) } }
+        guard !files.isEmpty else {
+            return (headers + textHeaders).joined(separator: "\r\n") + "\r\n\r\n" + text
+        }
 
+        headers.append("Content-Type: multipart/mixed; boundary=\"\(boundary)\"")
+        var parts = [textHeaders.joined(separator: "\r\n") + "\r\n\r\n" + text]
+        for (attachment, data) in files {
+            let name = singleLine(attachment.filename).replacingOccurrences(of: "\"", with: "'")
+            let type = singleLine(attachment.mimeType).filter { !$0.isWhitespace && $0 != ";" }
+            parts.append([
+                "Content-Type: \(type.isEmpty ? "application/octet-stream" : type); name=\"\(encodeHeader(name))\"",
+                "Content-Disposition: attachment; \(filenameParameter(name))",
+                "Content-Transfer-Encoding: base64",
+            ].joined(separator: "\r\n") + "\r\n\r\n" + base64Lines(data))
+        }
+        let body = parts.map { "--\(boundary)\r\n\($0)\r\n" }.joined() + "--\(boundary)--\r\n"
         return headers.joined(separator: "\r\n") + "\r\n\r\n" + body
+    }
+
+    static func base64Lines(_ data: Data) -> String {
+        data.base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed])
+    }
+
+    /// `filename="..."`, or the RFC 2231 form for names that aren't plain ASCII.
+    static func filenameParameter(_ name: String) -> String {
+        guard name.unicodeScalars.contains(where: { !$0.isASCII }) else { return "filename=\"\(name)\"" }
+        var allowed = CharacterSet.alphanumerics.intersection(CharacterSet(charactersIn: Unicode.Scalar(0)...Unicode.Scalar(127)))
+        allowed.insert(charactersIn: "-._~")
+        return "filename*=UTF-8''\(name.addingPercentEncoding(withAllowedCharacters: allowed) ?? name)"
     }
 
     /// The message encoded the way the Gmail API wants it: base64url without padding.

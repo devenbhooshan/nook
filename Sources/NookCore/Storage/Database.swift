@@ -219,7 +219,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 8
+    static let version = 9
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -253,6 +253,16 @@ enum Schema {
             // version 7, so the cleanup is version 8; anything older skips straight past both.
             (7, {}),
             (8, { try db.run("DROP TABLE IF EXISTS rules") }),
+            (9, {
+                // Attachments. `attachments` is JSON, and NULL for mail stored before Nook kept them, which is
+                // fetched again when it's opened. The flag on `messages` keeps lists from reading bodies.
+                if try !hasColumn(db, table: "message_bodies", column: "attachments") {
+                    try db.run("ALTER TABLE message_bodies ADD COLUMN attachments TEXT")
+                }
+                if try !hasColumn(db, table: "messages", column: "has_attachments") {
+                    try db.run("ALTER TABLE messages ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0")
+                }
+            }),
         ]
         for (number, step) in steps where current < number {
             try step()

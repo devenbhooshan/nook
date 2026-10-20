@@ -26,17 +26,58 @@ enum DemoData {
             "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
             "return": (36, "\r"), "tab": (48, "\t"),
         ]
-        for key in keys {
-            guard let (code, characters) = codes[key] else { continue }
+        let letters: [String: UInt16] = ["a": 0, "f": 3, "k": 40, "j": 38]
+        for entry in keys {
+            // "cmd-shift-a" style: modifiers, then the key.
+            var parts = entry.split(separator: "-").map(String.init)
+            let key = parts.removeLast()
+            var flags: NSEvent.ModifierFlags = []
+            if parts.contains("cmd") { flags.insert(.command) }
+            if parts.contains("shift") { flags.insert(.shift) }
+            guard let (code, characters) = codes[key] ?? letters[key].map({ ($0, key) }) else { continue }
             for down in [true, false] {
                 guard let event = NSEvent.keyEvent(
-                    with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
                     windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
                     isARepeat: false, keyCode: code
                 ) else { continue }
                 NSApp.postEvent(event, atStart: false)
             }
         }
+    }
+
+    /// Clicks at a point measured in points from the top left of the window (its sheet, when one is open).
+    private static func click(at point: CGPoint, in store: AppStore) {
+        guard let main = store.mainWindow else { return }
+        let window = main.attachedSheet ?? main
+        let location = NSPoint(x: point.x, y: window.frame.height - point.y)
+        // Move there first and linger, the way a person does, so hover effects (tooltips) are part of the test.
+        // Warping the real pointer is what makes tracking areas notice.
+        let screenPoint = window.convertPoint(toScreen: location)
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        CGWarpMouseCursorPosition(CGPoint(x: screenPoint.x, y: mainHeight - screenPoint.y))
+        if let move = NSEvent.mouseEvent(
+            with: .mouseMoved, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0
+        ) { NSApp.postEvent(move, atStart: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { press(at: location, in: window) }
+    }
+
+    private static func press(at location: NSPoint, in window: NSWindow) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: location, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+            ) else { continue }
+            NSApp.postEvent(event, atStart: false)
+        }
+    }
+
+    /// Prints the visible windows and panels, so a test can tell whether a picker or dialog appeared.
+    private static func reportWindows() {
+        let names = NSApp.windows.filter(\.isVisible).map { "\(type(of: $0))" }
+        print("demo: windows=\(names.joined(separator: ","))")
+        fflush(stdout)
     }
 
     /// Prints what's open and how far it's scrolled, so input handling can be checked without a screenshot.
@@ -105,6 +146,19 @@ enum DemoData {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { pressKeys(keys, in: store) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
         }
+        if let flag = arguments.firstIndex(of: "--click"), arguments.indices.contains(flag + 1) {
+            let values = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            if values.count == 2 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { click(at: CGPoint(x: values[0], y: values[1]), in: store) }
+            }
+        }
+        if let flag = arguments.firstIndex(of: "--attach"), arguments.indices.contains(flag + 1) {
+            let url = URL(fileURLWithPath: arguments[flag + 1])
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NotificationCenter.default.post(name: .nookDemoAttach, object: [url]) }
+        }
+        if arguments.contains("--report-windows") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { reportWindows() }
+        }
         if arguments.contains("--swipe") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { swipeBack(in: store) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
@@ -156,7 +210,8 @@ enum DemoData {
         let now = Date()
         func message(
             _ id: String, _ account: String, thread: String? = nil, from: (String, String), subject: String, body: String,
-            hoursAgo: Double, unread: Bool = false, starred: Bool = false, inbox: Bool = true, html: String = "", tags: [String] = []
+            hoursAgo: Double, unread: Bool = false, starred: Bool = false, inbox: Bool = true, html: String = "", tags: [String] = [],
+            files: [Attachment] = []
         ) -> (MailMessage, [String]) {
             var labels: Set<String> = []
             if inbox { labels.insert(SystemLabel.inbox) }
@@ -166,14 +221,15 @@ enum DemoData {
                 id: id, account: account, threadId: thread ?? id, fromName: from.0, fromEmail: from.1,
                 to: "Sam Rivera <\(account)>", subject: subject, snippet: String(body.replacingOccurrences(of: "\n", with: " ").prefix(120)),
                 bodyHTML: html, bodyText: body, date: now.addingTimeInterval(-hoursAgo * 3600), labels: labels,
-                messageIdHeader: "<\(id)@demo.example>"
+                messageIdHeader: "<\(id)@demo.example>", attachments: files
             )
             return (message, tags)
         }
 
         let samples: [(MailMessage, [String])] = [
             message("w1", work, thread: "launch", from: ("Priya Natarajan", "priya@acme.example"), subject: "Launch checklist for Thursday",
-                    body: "Hey Sam,\n\nCan you confirm the release notes are final by tomorrow noon? Legal signed off on the privacy copy this morning.\n\nAlso — do we still want the waitlist email to go out at 9am PT?\n\nThanks,\nPriya", hoursAgo: 0.4, unread: true, tags: ["Needs Reply"]),
+                    body: "Hey Sam,\n\nCan you confirm the release notes are final by tomorrow noon? Legal signed off on the privacy copy this morning.\n\nAlso — do we still want the waitlist email to go out at 9am PT?\n\nThanks,\nPriya", hoursAgo: 0.4, unread: true, tags: ["Needs Reply"],
+                    files: [DemoAttachments.pdf("Release notes v3.pdf", size: 184_320), DemoAttachments.photo("launch-timeline.png", size: 412_000, hue: 0.42)]),
             message("w0", work, thread: "launch", from: ("Sam Rivera", work), subject: "Launch checklist for Thursday",
                     body: "Draft notes are in the doc. I'll do a final pass tonight.", hoursAgo: 5, inbox: false),
             message("p1", personal, from: ("Maya Chen", "maya.chen@hey.example"), subject: "Dinner Saturday?",
@@ -181,7 +237,7 @@ enum DemoData {
             message("p2", personal, from: ("Northwind Air", "receipts@northwind.example"), subject: "Your trip to Lisbon: booking confirmed",
                     body: "Confirmation ABX42Q. SFO → LIS, Oct 24, 6:05 PM. Seat 14A. Total charged: $642.18.", hoursAgo: 3, starred: true,
                     html: "<div style=\"font-family:-apple-system,Helvetica;max-width:560px;margin:0 auto;padding:28px;color:#1d1d1f\"><div style=\"font-size:13px;color:#86868b;letter-spacing:.06em\">NORTHWIND AIR</div><h1 style=\"font-size:26px;margin:10px 0 18px\">You're going to Lisbon ✈️</h1><table style=\"width:100%;border-collapse:collapse;font-size:14px\"><tr><td style=\"padding:10px 0;border-top:1px solid #eee;color:#86868b\">Confirmation</td><td style=\"text-align:right;border-top:1px solid #eee\"><b>ABX42Q</b></td></tr><tr><td style=\"padding:10px 0;border-top:1px solid #eee;color:#86868b\">Flight</td><td style=\"text-align:right;border-top:1px solid #eee\">SFO → LIS · Oct 24, 6:05 PM</td></tr><tr><td style=\"padding:10px 0;border-top:1px solid #eee;color:#86868b\">Seat</td><td style=\"text-align:right;border-top:1px solid #eee\">14A</td></tr><tr><td style=\"padding:10px 0;border-top:1px solid #eee;color:#86868b\">Total</td><td style=\"text-align:right;border-top:1px solid #eee\">$642.18</td></tr></table><img src=\"https://tracking.northwind.example/open.gif\" width=1 height=1></div>",
-                    tags: ["Travel", "Receipt"]),
+                    tags: ["Travel", "Receipt"], files: [DemoAttachments.pdf("Boarding pass ABX42Q.pdf", size: 96_200)]),
             message("w2", work, from: ("GitHub", "notifications@github.example"), subject: "[acme/nook] PR #482: Speed up incremental sync",
                     body: "jordan-lee requested your review on this pull request. 4 files changed, +212 −87.", hoursAgo: 4, unread: true, tags: ["Notification"]),
             message("p3", personal, from: ("The Margin", "hello@themargin.example"), subject: "Issue 112: Why local-first software is having a moment",
@@ -193,9 +249,16 @@ enum DemoData {
             message("p5", personal, from: ("Lumen Store", "orders@lumen.example"), subject: "Your order has shipped",
                     body: "Order #88213: Desk lamp (Walnut). Arriving Friday.", hoursAgo: 30, tags: ["Receipt"]),
             message("w4", work, from: ("Alex Kim", "alex@acme.example"), subject: "Re: Q4 planning doc",
-                    body: "Left comments on the roadmap section. I think we should cut the export feature and double down on search.", hoursAgo: 50, starred: true),
+                    body: "Left comments on the roadmap section. I think we should cut the export feature and double down on search.", hoursAgo: 50, starred: true,
+                    html: "<div dir=\"ltr\">Left comments on the roadmap section. I think we should cut the export feature and double down on search.<br><br>Alex</div><br><div class=\"gmail_quote\"><div dir=\"ltr\" class=\"gmail_attr\">On Mon, Oct 12, 2026 at 9:14 AM Sam Rivera &lt;sam@acme.example&gt; wrote:<br></div><blockquote class=\"gmail_quote\" style=\"margin:0 0 0 .8ex;border-left:1px solid #ccc;padding-left:1ex\">\(String(repeating: "<p>Here's the Q4 planning doc. Comments welcome on every section, especially the roadmap and hiring plan.</p>", count: 30))</blockquote></div>",
+                    files: [Attachment(partId: "1", filename: "Q4 roadmap.numbers", mimeType: "application/vnd.apple.numbers", size: 1_240_000, attachmentId: "demo-file:numbers")]),
             message("p6", personal, from: ("Dad", "rivera.senior@hey.example"), subject: "Photos from the lake",
-                    body: "Finally uploaded them. The one of the dog jumping off the dock is my favorite.", hoursAgo: 75, tags: ["Personal"]),
+                    body: "Finally uploaded them. The one of the dog jumping off the dock is my favorite.", hoursAgo: 75, tags: ["Personal"],
+                    files: [
+                        DemoAttachments.photo("IMG_2041.jpg", size: 2_310_000, hue: 0.55),
+                        DemoAttachments.photo("IMG_2047.jpg", size: 1_980_000, hue: 0.08),
+                        DemoAttachments.photo("IMG_2052.jpg", size: 2_640_000, hue: 0.33),
+                    ]),
             message("w5", work, from: ("Figma", "no-reply@figma.example"), subject: "Priya mentioned you in Nook — Reader v3",
                     body: "@sam can we tighten the spacing between message cards?", hoursAgo: 120, tags: ["Notification"]),
         ]
@@ -221,6 +284,76 @@ struct OfflineGmail: GmailService {
     func draftID(messageId: String) async throws -> String? { nil }
     func updateDraft(id: String, raw: String, threadId: String?) async throws {}
     func sendDraft(id: String) async throws {}
+    func attachment(messageId: String, attachmentId: String) async throws -> Data {
+        guard let data = DemoAttachments.data(for: attachmentId) else { throw GmailError.notFound }
+        return data
+    }
+}
+
+/// Sample files for the demo, drawn on demand so nothing is bundled.
+enum DemoAttachments {
+    private static var nextPart = 0
+
+    @MainActor static func pdf(_ name: String, size: Int) -> Attachment {
+        nextPart += 1
+        return Attachment(partId: "\(nextPart)", filename: name, mimeType: "application/pdf", size: size, attachmentId: "demo-pdf:\(name)")
+    }
+
+    @MainActor static func photo(_ name: String, size: Int, hue: Double) -> Attachment {
+        nextPart += 1
+        let type = name.hasSuffix(".png") ? "image/png" : "image/jpeg"
+        return Attachment(partId: "\(nextPart)", filename: name, mimeType: type, size: size, attachmentId: "demo-photo:\(hue)")
+    }
+
+    static func data(for id: String) -> Data? {
+        if id.hasPrefix("demo-pdf:") { return pdfData(title: String(id.dropFirst("demo-pdf:".count))) }
+        if id.hasPrefix("demo-photo:") { return photoData(hue: Double(id.dropFirst("demo-photo:".count)) ?? 0.5) }
+        if id.hasPrefix("demo-file:") { return Data("Sample file".utf8) }
+        return nil
+    }
+
+    /// A one-page document with a title and some ruled lines of "text".
+    private static func pdfData(title: String) -> Data? {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: data), let context = CGContext(consumer: consumer, mediaBox: &box, nil) else { return nil }
+        context.beginPDFPage(nil)
+        context.setFillColor(NSColor.white.cgColor)
+        context.fill(box)
+        context.setFillColor(NSColor(calibratedRed: 0.18, green: 0.61, blue: 0.48, alpha: 1).cgColor)
+        context.fill(CGRect(x: 56, y: 700, width: 220, height: 26))
+        context.setFillColor(NSColor(white: 0.82, alpha: 1).cgColor)
+        for line in 0..<22 {
+            let width: CGFloat = line % 5 == 4 ? 300 : 500
+            context.fill(CGRect(x: 56, y: 640 - CGFloat(line) * 24, width: width, height: 9))
+        }
+        context.endPDFPage()
+        context.closePDF()
+        _ = title
+        return data as Data
+    }
+
+    /// A soft landscape: sky, sun and two hills.
+    private static func photoData(hue: Double) -> Data? {
+        let width = 1200, height = 800
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        let sky = [NSColor(hue: hue, saturation: 0.35, brightness: 0.98, alpha: 1).cgColor,
+                   NSColor(hue: hue, saturation: 0.6, brightness: 0.75, alpha: 1).cgColor] as CFArray
+        if let gradient = CGGradient(colorsSpace: nil, colors: sky, locations: [0, 1]) {
+            context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: CGFloat(height)), end: .zero, options: [])
+        }
+        context.setFillColor(NSColor(hue: 0.12, saturation: 0.5, brightness: 1, alpha: 0.9).cgColor)
+        context.fillEllipse(in: CGRect(x: 820, y: 520, width: 150, height: 150))
+        context.setFillColor(NSColor(hue: hue + 0.2, saturation: 0.45, brightness: 0.5, alpha: 1).cgColor)
+        context.fillEllipse(in: CGRect(x: -300, y: -500, width: 1300, height: 900))
+        context.setFillColor(NSColor(hue: hue + 0.25, saturation: 0.5, brightness: 0.38, alpha: 1).cgColor)
+        context.fillEllipse(in: CGRect(x: 400, y: -600, width: 1300, height: 900))
+        guard let image = context.makeImage() else { return nil }
+        return NSBitmapImageRep(cgImage: image).representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+    }
 }
 
 /// A full-length newsletter, so the demo has a conversation long enough to scroll.

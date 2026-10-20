@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
+- **Attachments, done properly.** Images and PDFs show a preview under the message. Click for Quick Look, double-click to open, drag to Finder, or save everything to Downloads. Images pasted into an email show where the sender put them. Attach files with `⌘⇧A` or by dropping them on the message, and forwarding keeps the original files.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them, and JavaScript in email never runs.
@@ -111,13 +112,30 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 | `/` | Search | `u` | Toggle read | `f` | Forward |
 | `⌘K` | Command palette | `l` | Tag | `⌘↵` | Send |
 | `⌘0`–`⌘9` | All accounts / one account | `z` | Undo | `?` | All shortcuts |
-| `⌘\` | Show or hide sidebar | | | | |
+| `⌘\` | Show or hide sidebar | | | `⌘⇧A` | Attach files |
 
 Go-to sequences: `g i` inbox, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
 
 In the ⌘K palette, the command you usually pick for the letters you type comes first: pick Move to Trash after typing `t` a couple of times, and `t` `↵` trashes. With nothing typed, the list keeps its fixed order.
 
 In an open conversation, `↑` / `↓` scroll it, `space` / `⇧space` and Page Up / Page Down move a page, and Home / End jump to the top or bottom. Swipe right with two fingers on a trackpad (or one on a Magic Mouse) to go back to the list; this follows **Swipe between pages** in System Settings.
+
+## Reading and replying
+
+Reply, Reply all and Forward stay pinned at the bottom of a conversation, so they're in reach however long it gets. The earlier messages a reply quotes are folded behind a `•••` button, the way Gmail does it; click it to read them. Replies open with an empty page: the message you're answering is folded under what you write, and goes out below it when you send.
+
+## Attachments
+
+Files show up under the message they came with. Images and PDFs get a preview; other files show their Finder icon.
+
+- **Click** a file for Quick Look. The arrow keys page through the other files in the conversation.
+- **Double-click** to open it in its app, or **drag** it to Finder, the Desktop or another app.
+- **Right-click** for Save to Downloads, Save As… and Show in Finder. With more than one file, **Save all to Downloads** saves them together. These are also in the ⌘K palette.
+- Images placed inside an email (screenshots pasted into Gmail, logos in a signature) show where the sender put them, and aren't listed again as files.
+
+Files stay in Gmail until you use one. Nook then downloads it straight from Gmail and keeps it in memory. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
+
+To send files, press `⌘⇧A` or click the paperclip, or drop files anywhere on the message. Gmail's limit is 25 MB per message, and Nook tells you before you press Send. Forwarding keeps the original's files, and a Gmail draft opened in Nook keeps its attachments; both are fetched from Gmail when you send. Assistants connected over MCP see file names, types and sizes, never the files themselves.
 
 ## Drafts
 
@@ -129,7 +147,10 @@ Search covers every message stored locally, with full-text prefix matching. It a
 
 ```
 from:anna  to:ben  tag:receipt  is:unread  is:starred  in:sent  account:work  "exact phrase"
+has:attachment  filename:pdf
 ```
+
+File names are part of the full-text index too, so searching `invoice` finds the email with `invoice.pdf` attached.
 
 ## Tagging and the split inbox
 
@@ -167,7 +188,7 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 | `list_accounts` | Connected accounts and unread counts |
 | `list_tags` | Tags, their descriptions, and inbox counts |
 | `search_threads` | Search with Nook's syntax (`from:`, `tag:`, `is:unread`, …), by mailbox, tag or account |
-| `get_thread` | Every message in a conversation, as plain text |
+| `get_thread` | Every message in a conversation, as plain text, with the names of attached files |
 | `draft_reply` | Opens a reply in Nook, prefilled, for you to review |
 | `compose_draft` | Opens a new message in Nook, prefilled, for you to review |
 
@@ -228,6 +249,7 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
 | Senders' profile photos | `~/Library/Caches/com.devenbhooshan.nook/Avatars`, downloaded once from Google, files named by a hash of the address |
 | Company logos (off by default) | Same folder. With **Settings → Privacy → Show company logos** on, Nook looks up each sender's domain in DNS (BIMI) and downloads its logo from the company's own server |
+| Attachments you open, preview or drag | A temporary folder (`$TMPDIR/Nook Attachments`) only you can read, emptied when Nook starts and quits. Files you save go where you save them |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
 | MCP | No network at all: stdio to the client that launches `nook-mcp` |
@@ -240,6 +262,16 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 swift run Nook --demo                    # run from source on sample data
 ./scripts/build-app.sh --debug           # debug .app bundle
 ```
+
+Demo mode can drive the UI on its own, so changes can be checked without clicking by hand or granting Accessibility access. It posts events to its own window:
+
+```bash
+swift run Nook --demo --open 0 --compose --click 29,574 --report-windows   # click the paperclip; prints the open windows (NSOpenPanel)
+swift run Nook --demo --open 0 --compose --attach README.md --snapshot out.png   # attach a file, save a picture of the window
+open -n --stdout out.txt build/Nook.app --args --demo --open 0 --click 293,553 --report-windows   # same, against the signed app
+```
+
+`--click x,y` is in points from the top left of the window, or of the sheet when one is open. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
 
 `build-app.sh` signs with the most stable identity it finds: `$NOOK_SIGN_IDENTITY`, then a **Developer ID Application** certificate in your keychain, then the local certificate from `setup-signing.sh`, then ad hoc. Have one of the first three in place before you connect real accounts. Ad hoc builds look like a new app to macOS on every rebuild, so Keychain asks you to approve access to Nook's saved sign-ins each time.
 
@@ -267,8 +299,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 ## Roadmap
 
 1. **Snooze and reminders** (top priority)
-2. Attachments: viewing and sending
-3. Rich-text compose, signatures, send later, undo send
+2. Rich-text compose, signatures, send later, undo send
 
 ## License
 

@@ -35,6 +35,20 @@ public protocol GmailService: Sendable {
     func draftID(messageId: String) async throws -> String?
     func updateDraft(id: String, raw: String, threadId: String?) async throws
     func sendDraft(id: String) async throws
+    /// The bytes of one attachment.
+    func attachment(messageId: String, attachmentId: String) async throws -> Data
+}
+
+public extension GmailService {
+    /// The bytes of an attachment, whether Gmail keeps them behind an attachment id or sends them with the message.
+    func data(for attachment: Attachment, messageId: String) async throws -> Data {
+        if let attachmentId = attachment.attachmentId {
+            return try await self.attachment(messageId: messageId, attachmentId: attachmentId)
+        }
+        let message = try await message(id: messageId, format: .full)
+        guard let data = MIMEParser.inlineData(partId: attachment.partId, in: message) else { throw GmailError.notFound }
+        return data
+    }
 }
 
 /// Sends HTTP requests. `URLSession` conforms; tests use a stub.
@@ -147,11 +161,27 @@ public struct GmailClient: GmailService {
     }
 
     public func send(raw: String, threadId: String?) async throws {
+        // A 5xx on send can arrive after Gmail already accepted the message; retrying could send it twice.
+        if raw.utf8.count > Self.simpleRequestLimit {
+            var metadata: [String: Any] = [:]
+            if let threadId { metadata["threadId"] = threadId }
+            _ = try await upload("messages/send", method: "POST", metadata: metadata, raw: raw, retryServerErrors: false)
+            return
+        }
         var body: [String: Any] = ["raw": raw]
         if let threadId { body["threadId"] = threadId }
-        // A 5xx on send can arrive after Gmail already accepted the message; retrying could send it twice.
         _ = try await request("messages/send", method: "POST", body: body, retryServerErrors: false)
     }
+
+    public func attachment(messageId: String, attachmentId: String) async throws -> Data {
+        struct Body: Decodable { var data: String }
+        let body: Body = try await get("messages/\(messageId)/attachments/\(attachmentId)")
+        guard let data = MIMEParser.decodeBase64URL(body.data) else { throw GmailError.http(status: 200, message: "Unreadable attachment") }
+        return data
+    }
+
+    /// Gmail takes a message inside a JSON request only up to about 5 MB. Bigger ones (attachments) are uploaded.
+    static let simpleRequestLimit = 4 * 1024 * 1024
 
     public func draftID(messageId: String) async throws -> String? {
         struct Page: Decodable {
@@ -171,6 +201,12 @@ public struct GmailClient: GmailService {
     }
 
     public func updateDraft(id: String, raw: String, threadId: String?) async throws {
+        if raw.utf8.count > Self.simpleRequestLimit {
+            var message: [String: Any] = [:]
+            if let threadId { message["threadId"] = threadId }
+            _ = try await upload("drafts/\(id)", method: "PUT", metadata: ["id": id, "message": message], raw: raw)
+            return
+        }
         var message: [String: Any] = ["raw": raw]
         if let threadId { message["threadId"] = threadId }
         _ = try await request("drafts/\(id)", method: "PUT", body: ["id": id, "message": message])
@@ -188,13 +224,35 @@ public struct GmailClient: GmailService {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// Sends a message as a multipart upload: JSON metadata, then the message itself as `message/rfc822`.
+    func upload(
+        _ path: String, method: String, metadata: [String: Any], raw: String, retryServerErrors: Bool = true
+    ) async throws -> Data {
+        guard let message = MIMEParser.decodeBase64URL(raw) else { throw GmailError.http(status: 0, message: "Couldn't encode the message") }
+        let boundary = "nook-upload-\(UUID().uuidString)"
+        var body = Data("--\(boundary)\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".utf8)
+        body += try JSONSerialization.data(withJSONObject: metadata)
+        body += Data("\r\n--\(boundary)\r\nContent-Type: message/rfc822\r\n\r\n".utf8)
+        body += message
+        body += Data("\r\n--\(boundary)--\r\n".utf8)
+        return try await request(
+            path, query: [URLQueryItem(name: "uploadType", value: "multipart")], method: method,
+            rawBody: (body, "multipart/related; boundary=\(boundary)"), upload: true, retryServerErrors: retryServerErrors
+        )
+    }
+
     func request(
         _ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil,
-        retryServerErrors: Bool = true
+        rawBody: (data: Data, contentType: String)? = nil, upload: Bool = false, retryServerErrors: Bool = true
     ) async throws -> Data {
-        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
+        // Uploads go to the same path under /upload/.
+        let base = upload
+            ? URL(string: baseURL.absoluteString.replacingOccurrences(of: "/gmail/v1/", with: "/upload/gmail/v1/")) ?? baseURL
+            : baseURL
+        var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { components.queryItems = query }
-        let bodyData = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+        let bodyData = try rawBody?.data ?? body.map { try JSONSerialization.data(withJSONObject: $0) }
+        let contentType = rawBody?.contentType ?? "application/json"
 
         var attempt = 0
         var refreshed = false
@@ -205,7 +263,7 @@ public struct GmailClient: GmailService {
             request.setValue("Bearer \(try await tokens.accessToken(forceRefresh: refreshed))", forHTTPHeaderField: "Authorization")
             if let bodyData {
                 request.httpBody = bodyData
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(contentType, forHTTPHeaderField: "Content-Type")
             }
 
             let (data, response) = try await transport.send(request)

@@ -138,6 +138,8 @@ public actor SyncEngine {
                     report.added += try await fetchAndStore(ids.filter { !known.contains($0) }, account: email, service: service)
                     draftsChecked.insert(email)
                 }
+                // A few older messages at a time, so mail stored before Nook kept attachments shows its files.
+                try? await fillInAttachments(account: email, ids: repo.messagesMissingAttachments(account: email, limit: 40), service: service)
                 return report
             } catch GmailError.notFound {
                 // History older than about a week expires. Start over, and re-check labels we can no longer replay.
@@ -252,6 +254,28 @@ public actor SyncEngine {
         try repo.setHistoryId(history.historyId, for: email)
         onChange()
         return report
+    }
+
+    // MARK: Attachments
+
+    /// Fetches these messages again to learn their attachments, keeping the labels stored here, which may hold
+    /// a change still on its way to Gmail.
+    public func fillInAttachments(account: String, ids: [String]) async throws {
+        try await fillInAttachments(account: account, ids: ids, service: try service(for: account))
+    }
+
+    private func fillInAttachments(account: String, ids: [String], service: GmailService) async throws {
+        guard !ids.isEmpty else { return }
+        let fetched = try await fetch(ids, format: .full, service: service).messages
+        try Task.checkCancellation()
+        let messages = fetched.compactMap { gmail -> MailMessage? in
+            guard let stored = repo.message(account: account, id: gmail.id) else { return nil }
+            var message = MIMEParser.message(from: gmail, account: account)
+            message.labels = stored.labels
+            return message
+        }
+        try repo.upsert(messages)
+        if !messages.isEmpty { onChange() }
     }
 
     // MARK: Fetching

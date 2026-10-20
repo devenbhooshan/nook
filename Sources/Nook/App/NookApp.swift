@@ -10,6 +10,9 @@ struct NookApp: App {
     init() {
         // Command-line values like the "3" in `--open 3` would otherwise be treated as files to open, and an app
         // launched to open files doesn't show its window.
+        // Only ever registered, never saved: a saved copy of this key makes macOS's file picker service drop its
+        // connection to Nook, so attaching files silently fails. Clear one if an earlier build or `defaults write` left it.
+        UserDefaults.standard.removeObject(forKey: "NSTreatUnknownArgumentsAsOpen")
         UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
     }
 
@@ -53,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The window normally starts the store when it appears. If it hasn't appeared after a moment, start syncing
         // anyway: a mail app has to sync with no window open. (Starting before the window exists stops SwiftUI showing it.)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { AppStore.current?.start() }
+    }
+
+    /// Files written for Quick Look and dragging are copies of your mail; don't leave them behind.
+    func applicationWillTerminate(_ notification: Notification) {
+        AttachmentFiles.clearTemporaryFiles()
     }
 
     /// A mail app keeps syncing with its window closed. Quit with ⌘Q.

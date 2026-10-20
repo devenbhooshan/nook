@@ -9,22 +9,21 @@ public enum ReplyComposer {
         switch kind {
         case .reply, .replyAll:
             let recipients = replyRecipients(for: message, me: me, all: kind == .replyAll)
-            return Draft(
+            var draft = Draft(
                 from: account,
                 to: recipients.to.map(\.formatted).joined(separator: ", "),
                 cc: recipients.cc.map(\.formatted).joined(separator: ", "),
                 subject: prefixed(message.subject, with: "Re:"),
-                body: "\n\n" + quoted(message),
                 threadId: message.threadId,
                 inReplyTo: message.messageIdHeader.isEmpty ? nil : message.messageIdHeader,
                 references: message.references.isEmpty ? nil : message.references
             )
+            draft.quoted = quoted(message)
+            return draft
         case .forward:
-            return Draft(
-                from: account,
-                subject: prefixed(message.subject, with: "Fwd:"),
-                body: "\n\n" + forwarded(message)
-            )
+            var draft = Draft(from: account, subject: prefixed(message.subject, with: "Fwd:"))
+            draft.quoted = forwarded(message)
+            return draft
         }
     }
 
@@ -61,7 +60,7 @@ public enum ReplyComposer {
 
     static func quoted(_ message: MailMessage) -> String {
         let sender = Addresses.displayName(name: message.fromName, email: message.fromEmail)
-        let lines = message.bodyText.components(separatedBy: .newlines).prefix(80)
+        let lines = tidy(message.bodyText).components(separatedBy: .newlines)
         return "On \(longDate(message.date)), \(sender) wrote:\n" + lines.map { "> \($0)" }.joined(separator: "\n")
     }
 
@@ -74,7 +73,19 @@ public enum ReplyComposer {
             "To: \(message.to)",
         ]
         if !message.cc.isEmpty { lines.append("Cc: \(message.cc)") }
-        return lines.joined(separator: "\n") + "\n\n" + message.bodyText
+        return lines.joined(separator: "\n") + "\n\n" + tidy(message.bodyText)
+    }
+
+    /// Text from HTML mail is full of blank lines (every empty <div> and <br>). Keep at most one in a row.
+    static func tidy(_ text: String) -> String {
+        var lines: [String] = []
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty, lines.last?.isEmpty ?? true { continue }
+            lines.append(trimmed.isEmpty ? "" : line.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression))
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        return lines.joined(separator: "\n")
     }
 
     static func longDate(_ date: Date) -> String {

@@ -10,7 +10,20 @@ public enum MIMEParser {
 
         var html: String?
         var text: String?
-        if let payload = gmail.payload { collectBodies(payload, html: &html, text: &text) }
+        var attachments: [Attachment] = []
+        if let payload = gmail.payload {
+            collectBodies(payload, html: &html, text: &text)
+            collectAttachments(payload, into: &attachments)
+        }
+        // A file the HTML body shows with `cid:` is part of the body, not something to list under it.
+        if let html {
+            let lowered = html.lowercased()
+            for index in attachments.indices {
+                if let cid = attachments[index].contentId, lowered.contains("cid:\(cid.lowercased())") {
+                    attachments[index].isInline = true
+                }
+            }
+        }
 
         let from = Addresses.parse(header("From"))
         let bodyText = text ?? html.map(plainText(fromHTML:)) ?? ""
@@ -32,8 +45,60 @@ public enum MIMEParser {
             date: date,
             labels: Set(gmail.labelIds ?? []),
             messageIdHeader: header("Message-ID"),
-            references: header("References")
+            references: header("References"),
+            attachments: attachments
         )
+    }
+
+    /// Every part that's a file rather than a body: named parts, `attachment` parts and attached emails.
+    static func collectAttachments(_ part: GmailMessagePart, into attachments: inout [Attachment]) {
+        let mimeType = part.mimeType?.lowercased() ?? ""
+        func header(_ name: String) -> String {
+            part.headers?.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }?.value ?? ""
+        }
+        let disposition = header("Content-Disposition")
+        var filename = part.filename ?? ""
+        if filename.isEmpty, let named = parameter("filename", in: disposition) ?? parameter("name", in: header("Content-Type")) {
+            filename = named
+        }
+        let isFile = !filename.isEmpty || mimeType == "message/rfc822" || disposition.lowercased().hasPrefix("attachment")
+        if isFile {
+            if filename.isEmpty { filename = mimeType == "message/rfc822" ? "Attached message.eml" : "Attachment" }
+            let contentId = header("Content-ID").trimmingCharacters(in: CharacterSet(charactersIn: "<> "))
+            attachments.append(Attachment(
+                partId: part.partId ?? String(attachments.count),
+                filename: filename,
+                mimeType: mimeType.isEmpty ? "application/octet-stream" : mimeType,
+                size: part.body?.size ?? 0,
+                attachmentId: part.body?.attachmentId,
+                contentId: contentId.isEmpty ? nil : contentId
+            ))
+            // An attached email's own files belong to it, not to this message.
+            return
+        }
+        for child in part.parts ?? [] { collectAttachments(child, into: &attachments) }
+    }
+
+    /// The bytes of one part, when Gmail sent them with the message instead of behind an attachment id.
+    public static func inlineData(partId: String, in gmail: GmailMessage) -> Data? {
+        func find(_ part: GmailMessagePart) -> GmailMessagePart? {
+            if part.partId == partId { return part }
+            for child in part.parts ?? [] { if let found = find(child) { return found } }
+            return nil
+        }
+        guard let payload = gmail.payload, let part = find(payload), let encoded = part.body?.data else { return nil }
+        return decodeBase64URL(encoded)
+    }
+
+    /// Reads a parameter like `filename="report.pdf"` out of a header value.
+    static func parameter(_ name: String, in header: String) -> String? {
+        for piece in header.split(separator: ";").dropFirst() {
+            let pair = piece.split(separator: "=", maxSplits: 1)
+            guard pair.count == 2, pair[0].trimmingCharacters(in: .whitespaces).lowercased() == name else { continue }
+            let value = pair[1].trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "\"")))
+            if !value.isEmpty { return value }
+        }
+        return nil
     }
 
     /// Walks the MIME tree and keeps the first HTML and plain-text bodies, skipping attachments.

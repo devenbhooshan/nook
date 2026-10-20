@@ -1,5 +1,7 @@
+import AppKit
 import NookCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ComposeView: View {
     @EnvironmentObject private var store: AppStore
@@ -7,6 +9,8 @@ struct ComposeView: View {
     @State private var draft: Draft
     @State private var showCc: Bool
     @State private var confirmDiscard = false
+    @State private var dropTargeted = false
+    @State private var choosingFiles = false
     /// What the draft looked like when it opened, to tell whether discarding would lose anything.
     private let original: Draft
     @FocusState private var focus: Field?
@@ -92,17 +96,46 @@ struct ComposeView: View {
             field("Subject", text: $draft.subject, focus: .subject) { EmptyView() }
 
             TextEditor(text: $draft.body)
-                .font(.system(size: 14))
-                .lineSpacing(3)
+                .font(.system(size: 14.5))
+                .lineSpacing(5)
                 .scrollContentBackground(.hidden)
                 .focused($focus, equals: .body)
                 .padding(.horizontal, 15)
-                .padding(.vertical, 10)
+                .padding(.top, 14)
+                .padding(.bottom, 6)
+
+            if !draft.quoted.isEmpty {
+                quotedSection
+            }
+            if !draft.attachments.isEmpty {
+                ScrollView {
+                    FlowLayout(spacing: 6) {
+                        ForEach(draft.attachments) { attachment in
+                            OutgoingAttachmentChip(attachment: attachment) {
+                                draft.attachments.removeAll { $0.id == attachment.id }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 72)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 10)
+            }
 
             HStack(spacing: 10) {
-                Text("Sent directly from this Mac through Gmail")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                IconButton(systemImage: "paperclip", title: "Attach files", shortcut: "⌘⇧A", action: pickFiles)
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
+                if isOverLimit {
+                    Text("Attachments are over Gmail's 25 MB limit")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Sent directly from this Mac through Gmail")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
                 Spacer()
                 if draft.gmailDraftMessageId != nil {
                     // A draft from Gmail: closing keeps it in Drafts, with your changes if you want them.
@@ -142,11 +175,46 @@ struct ComposeView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!canSend)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .padding(.leading, 14)
+            .padding(.trailing, 20)
+            .padding(.vertical, 12)
             .overlay(alignment: .top) { Divider().opacity(0.5) }
         }
-        .frame(width: 660, height: 540)
+        .frame(width: 720, height: 600)
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Theme.accent, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .background(Theme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        Label("Drop to attach", systemImage: "paperclip")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.accent)
+                    }
+                    .padding(8)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Presented from the sheet itself; a modal open panel from inside a sheet can fail to appear.
+        .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+            defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+            attach(urls)
+        }
+        // `--attach <file>` in demo mode: the same path as choosing a file, so attaching can be checked without clicking.
+        .onReceive(NotificationCenter.default.publisher(for: .nookDemoAttach)) { note in
+            if let urls = note.object as? [URL] { attach(urls) }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            for provider in providers {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    guard let url else { return }
+                    Task { @MainActor in attach([url]) }
+                }
+            }
+            return true
+        }
         .onAppear {
             if draft.from.isEmpty { draft.from = store.accounts.first?.email ?? "" }
             // Start in To until it holds addresses to send to.
@@ -167,10 +235,67 @@ struct ComposeView: View {
 
     private var hasEdits: Bool {
         draft.to != original.to || draft.cc != original.cc || draft.subject != original.subject || draft.body != original.body
+            || draft.attachments.map(\.id) != original.attachments.map(\.id)
     }
 
     private var canSend: Bool {
-        !draft.from.isEmpty && hasRecipients
+        !draft.from.isEmpty && hasRecipients && !isOverLimit
+    }
+
+    private var isOverLimit: Bool {
+        draft.attachments.reduce(0) { $0 + $1.size } > OutgoingAttachment.gmailLimit
+    }
+
+    /// The message you're replying to or forwarding, folded away until you want it. Showing it moves it into the
+    /// editor, below what you've written, so you can read and trim it like the rest of the message.
+    private var quotedSection: some View {
+        Button(action: expandQuote) {
+            HStack(spacing: 6) {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 28, height: 16)
+                    .background(Color.primary.opacity(0.07), in: Capsule())
+                Text("Show \(quotedLabel)")
+                    .font(.system(size: 11.5))
+            }
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.quiet)
+        .clickable()
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func expandQuote() {
+        let mine = draft.body.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        draft.body = (mine.isEmpty ? "\n\n" : mine + "\n\n") + draft.quoted
+        draft.quoted = ""
+        focus = .body
+    }
+
+    private var quotedLabel: String {
+        draft.inReplyTo == nil ? "forwarded message" : "quoted text"
+    }
+
+    private func pickFiles() {
+        choosingFiles = true
+    }
+
+    private func attach(_ urls: [URL]) {
+        for url in urls {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                store.showToast("Folders can't be attached. Zip it first.", isError: true)
+                continue
+            }
+            do {
+                draft.attachments.append(try OutgoingAttachment.fromFile(url))
+            } catch {
+                store.showToast("Couldn't attach \(url.lastPathComponent): \(error.localizedDescription)", isError: true)
+            }
+        }
     }
 
     private var hasRecipients: Bool {

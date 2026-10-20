@@ -173,26 +173,29 @@ public final class MailRepository: @unchecked Sendable {
                 try db.execute(
                     """
                     INSERT INTO messages(account, id, thread_id, from_name, from_email, reply_to, to_addr, cc, subject,
-                                         snippet, date, labels, message_id, refs)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         snippet, date, labels, message_id, refs, has_attachments)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(account, id) DO UPDATE SET
                         thread_id = excluded.thread_id, from_name = excluded.from_name, from_email = excluded.from_email,
                         reply_to = excluded.reply_to, to_addr = excluded.to_addr, cc = excluded.cc,
                         subject = excluded.subject, snippet = excluded.snippet, date = excluded.date,
-                        labels = excluded.labels, message_id = excluded.message_id, refs = excluded.refs
+                        labels = excluded.labels, message_id = excluded.message_id, refs = excluded.refs,
+                        has_attachments = excluded.has_attachments
                     """,
                     [m.account, m.id, m.threadId, m.fromName, m.fromEmail, m.replyTo, m.to, m.cc, m.subject,
-                     m.snippet, m.date, Self.encode(m.labels), m.messageIdHeader, m.references]
+                     m.snippet, m.date, Self.encode(m.labels), m.messageIdHeader, m.references, !m.listedAttachments.isEmpty]
                 )
                 // Bodies live apart so the hot table stays small.
                 try db.execute(
-                    "INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text) VALUES (?, ?, ?, ?)",
-                    [m.account, m.id, m.bodyHTML, m.bodyText]
+                    "INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text, attachments) VALUES (?, ?, ?, ?, ?)",
+                    [m.account, m.id, m.bodyHTML, m.bodyText, Self.encode(m.attachments)]
                 )
                 try deleteFromSearch(account: m.account, id: m.id)
+                // File names are searchable, so "invoice" finds the email with invoice.pdf.
+                let fileNames = m.listedAttachments.map(\.filename).joined(separator: " ")
                 try db.execute(
                     "INSERT INTO messages_fts(account, id, subject, sender, body) VALUES (?, ?, ?, ?, ?)",
-                    [m.account, m.id, m.subject, "\(m.fromName) \(m.fromEmail) \(m.to) \(m.cc)", m.bodyText]
+                    [m.account, m.id, m.subject, "\(m.fromName) \(m.fromEmail) \(m.to) \(m.cc)", m.bodyText + " " + fileNames]
                 )
                 try db.execute(
                     "INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) VALUES (?, ?, ?)",
@@ -245,6 +248,30 @@ public final class MailRepository: @unchecked Sendable {
             [account, threadId]
         )) ?? []
         return rows.map(Self.message(from:))
+    }
+
+    /// Messages in a conversation stored before Nook kept attachments. Fetching them again fills that in.
+    public func messagesMissingAttachments(account: String, threadId: String) -> [String] {
+        let rows = (try? reader.query(
+            """
+            SELECT m.id FROM messages m JOIN message_bodies b ON b.account = m.account AND b.id = m.id
+            WHERE m.account = ? AND m.thread_id = ? AND b.attachments IS NULL
+            """,
+            [account, threadId]
+        )) ?? []
+        return rows.map { $0.string("id") }
+    }
+
+    /// The newest messages stored before Nook kept attachments, for filling them in a few at a time.
+    public func messagesMissingAttachments(account: String, limit: Int) -> [String] {
+        let rows = (try? reader.query(
+            """
+            SELECT m.id FROM messages m JOIN message_bodies b ON b.account = m.account AND b.id = m.id
+            WHERE m.account = ? AND b.attachments IS NULL ORDER BY m.date DESC LIMIT ?
+            """,
+            [account, limit]
+        )) ?? []
+        return rows.map { $0.string("id") }
     }
 
     /// Adds and removes labels on every message in a thread. Returns the labels from before the change, for undo.
@@ -382,13 +409,14 @@ public final class MailRepository: @unchecked Sendable {
             WITH k(account, thread_id) AS (VALUES \(values)),
             g AS (
                 SELECT m.account, m.thread_id, MAX(m.date) AS latest, COUNT(*) AS message_count,
-                       MAX(m.labels LIKE '%,UNREAD,%') AS unread, MAX(m.labels LIKE '%,STARRED,%') AS starred
+                       MAX(m.labels LIKE '%,UNREAD,%') AS unread, MAX(m.labels LIKE '%,STARRED,%') AS starred,
+                       MAX(m.has_attachments) AS attachments
                 FROM k JOIN messages m ON m.account = k.account AND m.thread_id = k.thread_id
                 WHERE m.labels NOT LIKE '%,SPAM,%' AND m.labels NOT LIKE '%,DRAFT,%' AND \(trashClause)
                 GROUP BY m.account, m.thread_id
             )
             SELECT m.account, m.id, m.thread_id, m.from_name, m.from_email, m.subject, m.snippet, m.date,
-                   g.message_count, g.unread, g.starred
+                   g.message_count, g.unread, g.starred, g.attachments
             FROM g JOIN messages m ON m.account = g.account AND m.thread_id = g.thread_id AND m.date = g.latest
             GROUP BY m.account, m.thread_id
             """, arguments)) ?? []
@@ -454,14 +482,26 @@ public final class MailRepository: @unchecked Sendable {
         if search.isStarred == true {
             clauses.append("m.labels LIKE '%,STARRED,%'")
         }
+        if search.hasAttachment {
+            clauses.append("m.has_attachments = 1")
+        }
+        for value in search.filenames {
+            clauses.append("""
+            m.has_attachments = 1 AND EXISTS (SELECT 1 FROM message_bodies b, json_each(b.attachments) f
+                WHERE b.account = m.account AND b.id = m.id AND json_extract(f.value, '$.isInline') = 0
+                  AND json_extract(f.value, '$.filename') LIKE ?)
+            """)
+            arguments.append("%\(value)%")
+        }
 
         // Group the matching messages by thread, then join back to fetch the newest one.
         let sql = """
         SELECT m.account, m.id, m.thread_id, m.from_name, m.from_email, m.subject, m.snippet, m.date,
-               g.message_count, g.unread, g.starred
+               g.message_count, g.unread, g.starred, g.attachments
         FROM (
             SELECT m.account, m.thread_id, MAX(m.date) AS latest, COUNT(*) AS message_count,
-                   MAX(m.labels LIKE '%,UNREAD,%') AS unread, MAX(m.labels LIKE '%,STARRED,%') AS starred
+                   MAX(m.labels LIKE '%,UNREAD,%') AS unread, MAX(m.labels LIKE '%,STARRED,%') AS starred,
+                   MAX(m.has_attachments) AS attachments
             FROM messages m
             WHERE \(clauses.joined(separator: " AND "))
             GROUP BY m.account, m.thread_id
@@ -493,7 +533,8 @@ public final class MailRepository: @unchecked Sendable {
             messageCount: row.int("message_count"),
             isUnread: row.int("unread") == 1,
             isStarred: row.int("starred") == 1,
-            tags: []
+            tags: [],
+            hasAttachments: row.int("attachments") == 1
         )
     }
 
@@ -694,7 +735,8 @@ public final class MailRepository: @unchecked Sendable {
 
     /// Full messages, bodies included. Only for reading a thread or tagging, never for lists.
     static let selectWithBodies = """
-    SELECT m.*, COALESCE(b.body_html, '') AS body_html, COALESCE(b.body_text, '') AS body_text
+    SELECT m.*, COALESCE(b.body_html, '') AS body_html, COALESCE(b.body_text, '') AS body_text,
+           b.attachments AS attachments
     FROM messages m LEFT JOIN message_bodies b ON b.account = m.account AND b.id = m.id
     """
 
@@ -705,6 +747,16 @@ public final class MailRepository: @unchecked Sendable {
 
     static func decode(_ labels: String) -> Set<String> {
         Set(labels.split(separator: ",").map(String.init))
+    }
+
+    static func encode(_ attachments: [Attachment]) -> String {
+        guard let data = try? JSONEncoder().encode(attachments) else { return "[]" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    static func decodeAttachments(_ json: String) -> [Attachment] {
+        guard !json.isEmpty else { return [] }
+        return (try? JSONDecoder().decode([Attachment].self, from: Data(json.utf8))) ?? []
     }
 
     static func message(from row: Row) -> MailMessage {
@@ -724,7 +776,8 @@ public final class MailRepository: @unchecked Sendable {
             date: Date(timeIntervalSince1970: row.double("date")),
             labels: decode(row.string("labels")),
             messageIdHeader: row.string("message_id"),
-            references: row.string("refs")
+            references: row.string("refs"),
+            attachments: decodeAttachments(row.string("attachments"))
         )
     }
 }
