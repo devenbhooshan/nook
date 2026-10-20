@@ -8,6 +8,9 @@ struct CommandPaletteView: View {
     @State private var commands: [PaletteCommand] = []
     @State private var ranking = PaletteRanking.load()
     @FocusState private var focused: Bool
+    /// When it opened. A pointer resting where the list appears reports a hover right away; that isn't a choice,
+    /// and following it would make Return pick whatever row happened to be under the pointer.
+    @State private var openedAt = Date()
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -54,7 +57,7 @@ struct CommandPaletteView: View {
                                 row(command, isHighlighted: index == highlighted)
                                     .id(index)
                                     .clickable()
-                                    .onHover { if $0 { highlighted = index } }
+                                    .onHover { if $0, Date().timeIntervalSince(openedAt) > 0.4 { highlighted = index } }
                                     .onTapGesture {
                                         highlighted = index
                                         run()
@@ -74,6 +77,7 @@ struct CommandPaletteView: View {
             .padding(.top, 90)
         }
         .onAppear {
+            openedAt = Date()
             commands = store.paletteCommands()
             focused = true
         }

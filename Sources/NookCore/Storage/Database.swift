@@ -219,7 +219,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 9
+    static let version = 10
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -263,6 +263,7 @@ enum Schema {
                     try db.run("ALTER TABLE messages ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0")
                 }
             }),
+            (10, { try db.run(ThreadIndex.remindersSQL) }),
         ]
         for (number, step) in steps where current < number {
             try step()

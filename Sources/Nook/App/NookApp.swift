@@ -45,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Held for the life of the app so App Nap doesn't stall the sync timer while the window is hidden.
     private var syncActivity: NSObjectProtocol?
 
+    /// Set before launch finishes, so clicking a reminder that launched Nook still opens it.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        ReminderNotifier.shared.install()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Lets `swift run` behave like a normal app with a Dock icon and menu bar.
         NSApp.setActivationPolicy(.regular)

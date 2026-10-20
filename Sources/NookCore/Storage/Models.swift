@@ -31,13 +31,14 @@ public enum SystemLabel {
 }
 
 public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
-    case inbox, starred, sent, drafts, all, trash
+    case inbox, reminders, starred, sent, drafts, all, trash
 
     public var id: String { rawValue }
 
     public var title: String {
         switch self {
         case .inbox: "Inbox"
+        case .reminders: "Reminders"
         case .starred: "Starred"
         case .sent: "Sent"
         case .drafts: "Drafts"
@@ -49,6 +50,7 @@ public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
     public var systemImage: String {
         switch self {
         case .inbox: "tray"
+        case .reminders: "bell"
         case .starred: "star"
         case .sent: "paperplane"
         case .drafts: "doc.text"
@@ -65,7 +67,8 @@ public enum Mailbox: String, CaseIterable, Identifiable, Sendable {
         case .sent: SystemLabel.sent
         case .drafts: SystemLabel.draft
         case .trash: SystemLabel.trash
-        case .all: nil
+        // Reminders are Nook's own, not a Gmail label.
+        case .all, .reminders: nil
         }
     }
 }
@@ -142,13 +145,16 @@ public struct ThreadSummary: Identifiable, Hashable, Sendable {
     public var isStarred: Bool
     public var tags: [String]
     public var hasAttachments: Bool
+    /// A reminder on the conversation, waiting or just gone off.
+    public var reminder: Reminder?
 
     public init(
         account: String, threadId: String, latestMessageId: String, fromName: String, fromEmail: String,
         subject: String, snippet: String, date: Date, messageCount: Int, isUnread: Bool, isStarred: Bool,
-        tags: [String], hasAttachments: Bool = false
+        tags: [String], hasAttachments: Bool = false, reminder: Reminder? = nil
     ) {
         self.hasAttachments = hasAttachments
+        self.reminder = reminder
         self.account = account
         self.threadId = threadId
         self.latestMessageId = latestMessageId
@@ -208,6 +214,8 @@ public struct Draft: Identifiable, Hashable, Sendable {
     public var attachments: [OutgoingAttachment]
     /// The message being replied to or forwarded. Kept out of the editor and added below what you write when sending.
     public var quoted: String = ""
+    /// Bring the conversation back to the inbox this long after sending, unless someone has replied by then.
+    public var followUpAfter: TimeInterval?
 
     /// What's sent: your text, then the quoted message.
     public var fullBody: String {
@@ -232,6 +240,42 @@ public struct Draft: Identifiable, Hashable, Sendable {
         self.inReplyTo = inReplyTo
         self.references = references
     }
+}
+
+/// A nudge about a conversation at a set time: a notification, and the conversation at the top of the inbox, unread.
+/// Kept on this Mac; Gmail has no reminders of its own.
+public struct Reminder: Hashable, Sendable {
+    public enum Kind: String, Sendable {
+        /// Remind me about this at `due`. Nothing happens to the conversation until then.
+        case remind
+        /// You sent something: remind me at `due` if nobody has replied since `since`.
+        case followUp = "followup"
+
+        /// Reads a stored kind. Stores from the short-lived snooze build said "snooze"; those are reminders now.
+        init(stored: String) {
+            self = Kind(rawValue: stored) ?? .remind
+        }
+    }
+
+    public var account: String
+    public var threadId: String
+    public var kind: Kind
+    public var due: Date
+    /// When the message you're waiting on a reply to was sent. Follow-ups only.
+    public var since: Date?
+    /// When it went off. Until it's done with, the conversation sorts as if new mail arrived then.
+    public var wokeAt: Date?
+
+    public init(account: String, threadId: String, kind: Kind, due: Date, since: Date? = nil, wokeAt: Date? = nil) {
+        self.account = account
+        self.threadId = threadId
+        self.kind = kind
+        self.due = due
+        self.since = since
+        self.wokeAt = wokeAt
+    }
+
+    public var isPending: Bool { wokeAt == nil }
 }
 
 /// A file that came with a message. The bytes stay in Gmail until you open or save it.

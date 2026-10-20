@@ -127,11 +127,12 @@ struct ComposeView: View {
             HStack(spacing: 10) {
                 IconButton(systemImage: "paperclip", title: "Attach files", shortcut: "⌘⇧A", action: pickFiles)
                     .keyboardShortcut("a", modifiers: [.command, .shift])
+                followUpMenu
                 if isOverLimit {
                     Text("Attachments are over Gmail's 25 MB limit")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.red)
-                } else {
+                } else if draft.followUpAfter == nil {
                     Text("Sent directly from this Mac through Gmail")
                         .font(.system(size: 11))
                         .foregroundStyle(.tertiary)
@@ -225,6 +226,56 @@ struct ComposeView: View {
         .onChange(of: focus) { suggest() }
         .onChange(of: store.contactBook) { suggest() }
         .onDisappear { suggestions.clear() }
+    }
+
+    /// Remind me if nobody replies. ⌘⇧R steps through the choices.
+    private var followUpMenu: some View {
+        let chosen = ReminderTime.followUpChoices.first { $0.after == draft.followUpAfter }
+        return Menu {
+            ForEach(ReminderTime.followUpChoices, id: \.title) { choice in
+                Toggle(isOn: Binding(get: { draft.followUpAfter == choice.after }, set: { _ in draft.followUpAfter = choice.after })) {
+                    Text("If no reply in \(choice.title)")
+                }
+            }
+            if draft.followUpAfter != nil {
+                Divider()
+                Button("Don't remind me") { draft.followUpAfter = nil }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: chosen == nil ? "bell" : "bell.fill")
+                    .font(.system(size: 13, weight: .medium))
+                if let chosen {
+                    Text("Remind me in \(chosen.title) if no reply")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+            }
+            .foregroundStyle(chosen == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.accent))
+            .padding(.horizontal, chosen == nil ? 0 : 8)
+            .frame(minWidth: 30, minHeight: 28)
+            .background(chosen == nil ? Color.clear : Theme.accent.opacity(0.1), in: Capsule())
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .clickable()
+        .help("Remind me if no reply (⌘⇧R)")
+        .background {
+            Button("Remind me if no reply", action: cycleFollowUp)
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+                .hidden()
+        }
+    }
+
+    private func cycleFollowUp() {
+        let choices = ReminderTime.followUpChoices.map(\.after)
+        guard let current = draft.followUpAfter, let index = choices.firstIndex(of: current) else {
+            draft.followUpAfter = choices.first
+            return
+        }
+        draft.followUpAfter = index + 1 < choices.count ? choices[index + 1] : nil
     }
 
     private var title: String {

@@ -78,6 +78,7 @@ struct ReaderView: View {
             .buttonStyle(.quiet)
         } trailing: {
             IconButton(systemImage: "checkmark", title: "Mark done", shortcut: "E") { store.archive() }
+            IconButton(systemImage: "bell", title: "Remind me", shortcut: "H", isActive: current.reminder?.isPending == true) { store.showReminderPicker() }
             IconButton(systemImage: "star", title: isStarred ? "Unstar" : "Star", shortcut: "S", isActive: isStarred) { store.toggleStar() }
             IconButton(systemImage: "envelope.badge", title: "Mark unread", shortcut: "U") { store.toggleRead() }
             IconButton(systemImage: "tag", title: "Tag", shortcut: "L") { store.openPalette(.tags) }
@@ -117,8 +118,33 @@ struct ReaderView: View {
                 ForEach(current.tags, id: \.self) { tag in
                     TagPill(name: tag, colorIndex: store.tag(named: tag)?.colorIndex ?? 0)
                 }
+                if let reminder = current.reminder {
+                    reminderChip(reminder)
+                }
             }
         }
+    }
+
+    /// When a waiting reminder goes off (click to change it), or why this came back.
+    private func reminderChip(_ reminder: Reminder) -> some View {
+        Button {
+            store.showReminderPicker()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "bell")
+                    .font(.system(size: 10.5, weight: .medium))
+                Text(reminder.isPending ? ReminderText.waiting(reminder) : ReminderText.woke(reminder))
+                    .font(.system(size: 11.5, weight: .medium))
+            }
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 8)
+            .frame(height: 22)
+            .background(Theme.accent.opacity(0.1), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.quiet)
+        .clickable()
+        .help(reminder.isPending ? "Change or remove (H)" : "Remind me again (H)")
     }
 
     private var remoteContentBanner: some View {

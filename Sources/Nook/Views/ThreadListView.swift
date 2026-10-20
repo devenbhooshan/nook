@@ -87,6 +87,7 @@ struct ThreadListView: View {
                                 isSelected: thread.id == store.selectedID,
                                 account: store.accounts.count > 1 && store.scope == nil ? store.account(for: thread.account) : nil,
                                 hiddenTag: currentTag,
+                                showsDue: store.effectiveMailbox == .reminders,
                                 tagColor: { store.tag(named: $0)?.colorIndex ?? 0 }
                             )
                             .id(thread.id)
@@ -119,6 +120,10 @@ struct ThreadListView: View {
         Button("Open") { store.open(thread) }
         Divider()
         Button("Mark Done") { store.selectedID = thread.id; store.archive() }
+        Button("Remind Me…") { store.selectedID = thread.id; store.showReminderPicker() }
+        if let reminder = thread.reminder, reminder.isPending {
+            Button("Remove Reminder") { store.removeReminder(thread) }
+        }
         Button(thread.isStarred ? "Unstar" : "Star") { store.selectedID = thread.id; store.toggleStar() }
         Button(thread.isUnread ? "Mark as Read" : "Mark as Unread") { store.selectedID = thread.id; store.toggleRead() }
         Divider()
@@ -336,6 +341,7 @@ private struct EmptyListView: View {
     private var title: String {
         if store.isSearching { return "No matches" }
         if isFirstSync { return "Downloading your mail" }
+        if store.mailbox == .reminders { return "No reminders" }
         if isUnreadFilter { return "You're all caught up" }
         if isWholeInbox { return "Inbox zero" }
         return store.mailbox == .inbox ? "Nothing in \(store.split.title)" : "Nothing in \(store.mailbox.title)"
@@ -344,6 +350,7 @@ private struct EmptyListView: View {
     private var subtitle: String {
         if store.isSearching { return "Search covers all mail stored on this Mac." }
         if isFirstSync { return "It's stored on this Mac, so it'll be instant from now on." }
+        if store.mailbox == .reminders { return "Press H on a conversation to be reminded about it, or ask for a reminder when you send." }
         if isUnreadFilter { return store.split == .everything ? "Nothing unread." : "Nothing unread in \(store.split.title)." }
         if isWholeInbox { return "Nothing needs you right now." }
         return "Press Tab for the next split."
@@ -464,6 +471,8 @@ struct ThreadRow: View {
     let isSelected: Bool
     let account: Account?
     var hiddenTag: String?
+    /// In Reminders, the time it comes back replaces the date.
+    var showsDue = false
     let tagColor: (String) -> Int
 
     @State private var hovering = false
@@ -523,10 +532,25 @@ struct ThreadRow: View {
             if let account {
                 AccountDot(colorIndex: account.colorIndex, size: 6).help(account.email)
             }
-            Text(thread.date.listLabel)
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(thread.isUnread ? .secondary : .tertiary)
+            if let reminder = thread.reminder, showsDue, reminder.isPending {
+                HStack(spacing: 4) {
+                    Image(systemName: "bell")
+                        .font(.system(size: 10.5, weight: .medium))
+                    Text(ReminderTime.short(reminder.due))
+                        .font(.system(size: 12).monospacedDigit())
+                }
+                .foregroundStyle(Theme.accent)
                 .frame(minWidth: 58, alignment: .trailing)
+                .help(ReminderText.waiting(reminder))
+            } else {
+                if let reminder = thread.reminder {
+                    reminderMark(reminder)
+                }
+                Text(thread.date.listLabel)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(thread.isUnread ? .secondary : .tertiary)
+                    .frame(minWidth: 58, alignment: .trailing)
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 44)
@@ -536,5 +560,40 @@ struct ThreadRow: View {
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+    }
+
+    /// A quiet mark beside the date: a reminder waiting, or one that just brought this back.
+    @ViewBuilder
+    private func reminderMark(_ reminder: Reminder) -> some View {
+        if reminder.isPending {
+            Image(systemName: "bell")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .help(ReminderText.waiting(reminder))
+        } else if reminder.kind == .followUp {
+            Text("No reply")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .help(ReminderText.woke(reminder))
+        } else {
+            Image(systemName: "bell.fill")
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.accent)
+                .help(ReminderText.woke(reminder))
+        }
+    }
+}
+
+/// How reminders are described in tooltips and the reader.
+enum ReminderText {
+    static func waiting(_ reminder: Reminder) -> String {
+        let when = ReminderTime.describe(reminder.due)
+        return reminder.kind == .remind ? "Reminding you \(when)" : "Reminding you \(when) if there's no reply"
+    }
+
+    static func woke(_ reminder: Reminder) -> String {
+        guard reminder.kind == .followUp else { return "Reminder" }
+        let sent = reminder.since.map { " since you wrote \($0.formatted(.relative(presentation: .named)))" } ?? ""
+        return "No reply\(sent)"
     }
 }

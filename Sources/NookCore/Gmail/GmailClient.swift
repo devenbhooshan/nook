@@ -30,11 +30,13 @@ public protocol GmailService: Sendable {
     func modifyMessage(id: String, add: [String], remove: [String]) async throws
     func trashThread(id: String) async throws
     func untrashThread(id: String) async throws
-    func send(raw: String, threadId: String?) async throws
+    /// Sends a message. Returns the conversation Gmail put it in.
+    @discardableResult func send(raw: String, threadId: String?) async throws -> String?
     /// The id of the Gmail draft holding this message, or nil if there's no such draft any more.
     func draftID(messageId: String) async throws -> String?
     func updateDraft(id: String, raw: String, threadId: String?) async throws
-    func sendDraft(id: String) async throws
+    /// Sends a draft. Returns the conversation Gmail put it in.
+    @discardableResult func sendDraft(id: String) async throws -> String?
     /// The bytes of one attachment.
     func attachment(messageId: String, attachmentId: String) async throws -> Data
 }
@@ -160,17 +162,25 @@ public struct GmailClient: GmailService {
         _ = try await request("threads/\(id)/untrash", method: "POST")
     }
 
-    public func send(raw: String, threadId: String?) async throws {
+    @discardableResult
+    public func send(raw: String, threadId: String?) async throws -> String? {
         // A 5xx on send can arrive after Gmail already accepted the message; retrying could send it twice.
         if raw.utf8.count > Self.simpleRequestLimit {
             var metadata: [String: Any] = [:]
             if let threadId { metadata["threadId"] = threadId }
-            _ = try await upload("messages/send", method: "POST", metadata: metadata, raw: raw, retryServerErrors: false)
-            return
+            let data = try await upload("messages/send", method: "POST", metadata: metadata, raw: raw, retryServerErrors: false)
+            return Self.threadId(in: data) ?? threadId
         }
         var body: [String: Any] = ["raw": raw]
         if let threadId { body["threadId"] = threadId }
-        _ = try await request("messages/send", method: "POST", body: body, retryServerErrors: false)
+        let data = try await request("messages/send", method: "POST", body: body, retryServerErrors: false)
+        return Self.threadId(in: data) ?? threadId
+    }
+
+    /// The conversation a sent message landed in, from Gmail's reply.
+    static func threadId(in data: Data) -> String? {
+        struct Sent: Decodable { var threadId: String? }
+        return (try? JSONDecoder().decode(Sent.self, from: data))?.threadId
     }
 
     public func attachment(messageId: String, attachmentId: String) async throws -> Data {
@@ -212,9 +222,10 @@ public struct GmailClient: GmailService {
         _ = try await request("drafts/\(id)", method: "PUT", body: ["id": id, "message": message])
     }
 
-    public func sendDraft(id: String) async throws {
+    @discardableResult
+    public func sendDraft(id: String) async throws -> String? {
         // Like a plain send, a 5xx may arrive after Gmail sent it; don't retry.
-        _ = try await request("drafts/send", method: "POST", body: ["id": id], retryServerErrors: false)
+        Self.threadId(in: try await request("drafts/send", method: "POST", body: ["id": id], retryServerErrors: false))
     }
 
     // MARK: Transport

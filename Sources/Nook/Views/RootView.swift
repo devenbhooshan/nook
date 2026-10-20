@@ -46,6 +46,12 @@ struct RootView: View {
             }
         }
         .overlay {
+            if let thread = store.reminderTarget {
+                ReminderPickerView(thread: thread)
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
             if store.showHelp {
                 ShortcutHelpView()
                     .transition(.opacity)
@@ -60,6 +66,7 @@ struct RootView: View {
         }
         .animation(.snappy(duration: 0.15), value: store.showPalette)
         .animation(.snappy(duration: 0.15), value: store.showHelp)
+        .animation(.snappy(duration: 0.15), value: store.reminderTarget?.id)
         .sheet(item: $store.draft) { draft in
             ComposeView(draft: draft)
         }

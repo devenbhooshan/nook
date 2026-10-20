@@ -81,6 +81,8 @@ final class AppStore: ObservableObject {
     @Published var showPalette = false
     @Published var paletteMode: PaletteMode = .everything
     @Published var showHelp = false
+    /// The conversation the reminder picker is choosing a time for.
+    @Published var reminderTarget: ThreadSummary?
     @Published var draft: Draft?
     /// Recipient suggestions for the To and Cc fields. Rebuilt in the background each time a message is started.
     @Published private(set) var contactBook = ContactBook()
@@ -147,6 +149,8 @@ final class AppStore: ObservableObject {
     private var reloadPending = false
     private var subscriptions = Set<AnyCancellable>()
     private var syncLoop: Task<Void, Never>?
+    /// Sleeps until the next reminder is due.
+    private var reminderTimer: Task<Void, Never>?
     private lazy var keyRouter = KeyRouter(store: self)
 
     static let syncInterval: Duration = .seconds(30)
@@ -227,6 +231,9 @@ final class AppStore: ObservableObject {
         upgradeTagsIfNeeded()
         tags = repo.tags()
         reload()
+        restoreSnoozedConversations()
+        // Reminders that came due while Nook wasn't running go off now.
+        wakeDueReminders()
 
         $searchText
             .removeDuplicates()
@@ -560,6 +567,8 @@ final class AppStore: ObservableObject {
             lastSynced = Date()
             loadAccounts(checkSignIns: !syncErrors.isEmpty || !signedOutAccounts.isEmpty)
             reload()
+            // New mail may answer a follow-up.
+            wakeDueReminders()
             refreshPhotosIfDue()
             Task.detached { await tagger.run() }
         }
@@ -782,6 +791,8 @@ final class AppStore: ObservableObject {
 
     func archive() {
         guard let thread = currentThread else { return }
+        // In Reminders, done means done with the reminder.
+        if effectiveMailbox == .reminders, thread.reminder?.isPending == true { return removeReminder(thread) }
         let inInbox = repo.threadMessages(account: thread.account, threadId: thread.threadId).contains { $0.labels.contains(SystemLabel.inbox) }
         if inInbox {
             changeLabels(thread, add: [], remove: [SystemLabel.inbox], message: "Marked done")
@@ -879,8 +890,11 @@ final class AppStore: ObservableObject {
     /// the old labels back. If Gmail refuses, the local change is rolled back and the conversation is re-read from
     /// Gmail, so Nook never shows a state Gmail doesn't have. (A history sync can't fix that on its own: a change
     /// Gmail never applied leaves no history to replay.)
+    ///
+    /// - Parameter onFailure: Undoes anything else the change did locally. With it set, a failure is quiet: the
+    ///   caller decides whether to try again.
     private func remote(
-        _ thread: ThreadSummary, rollback: [LabelSnapshot],
+        _ thread: ThreadSummary, rollback: [LabelSnapshot], onFailure: (() -> Void)? = nil,
         _ operation: @escaping @Sendable (GmailService) async throws -> Void
     ) {
         let sync = sync
@@ -892,8 +906,12 @@ final class AppStore: ObservableObject {
                 try await operation(try await sync.service(for: thread.account))
             } catch {
                 try? repo.restore(rollback)
+                if let onFailure {
+                    onFailure()
+                } else {
+                    showToast("Couldn't update Gmail, so the change was undone. \(error.localizedDescription)", isError: true)
+                }
                 reload()
-                showToast("Couldn't update Gmail, so the change was undone. \(error.localizedDescription)", isError: true)
                 try? await sync.refreshThread(account: thread.account, threadId: thread.threadId)
             }
         }
@@ -907,6 +925,118 @@ final class AppStore: ObservableObject {
         pending.action()
         reload()
         showToast("Undone")
+    }
+
+    // MARK: Reminders
+
+    /// H: choose when to be reminded about the conversation.
+    func showReminderPicker() {
+        guard let thread = currentThread else { return }
+        reminderTarget = thread
+    }
+
+    /// Reminds you about the conversation at `date`. Nothing else changes: it stays wherever it is until then.
+    /// On a conversation that already has a reminder waiting, moves it to the new time.
+    func remind(_ thread: ThreadSummary, at date: Date) {
+        let previous = repo.reminder(account: thread.account, threadId: thread.threadId)
+        // Moving a follow-up keeps it a follow-up: it still only goes off if nobody replies.
+        let kind = previous?.isPending == true ? previous?.kind ?? .remind : .remind
+        do {
+            try repo.setReminder(Reminder(
+                account: thread.account, threadId: thread.threadId, kind: kind, due: date, since: kind == .followUp ? previous?.since : nil
+            ))
+        } catch {
+            return showToast("Couldn't set the reminder: \(error.localizedDescription)", isError: true)
+        }
+        ReminderNotifier.shared.requestPermission()
+        refreshAfterChange(thread)
+        scheduleReminders()
+        let when = ReminderTime.describe(date)
+        showToast(kind == .remind ? "Reminding you \(when)" : "Reminding you \(when) if there's no reply", undo: { [weak self] in
+            if let previous { try? self?.repo.setReminder(previous) } else { try? self?.repo.removeReminder(account: thread.account, threadId: thread.threadId) }
+            self?.scheduleReminders()
+        })
+    }
+
+    /// Cancels a waiting reminder. The conversation stays where it is.
+    func removeReminder(_ thread: ThreadSummary) {
+        guard let removed = try? repo.removeReminder(account: thread.account, threadId: thread.threadId), removed.isPending else { return }
+        // In Reminders it leaves the list; anywhere else it stays put.
+        advance(after: thread)
+        scheduleReminders()
+        showToast("Reminder removed", undo: { [weak self] in
+            try? self?.repo.setReminder(removed)
+            self?.scheduleReminders()
+        })
+    }
+
+    /// A build that briefly had snooze archived conversations when you set a reminder on them. Puts them back in the
+    /// inbox, here and in Gmail; their reminders stay.
+    private func restoreSnoozedConversations() {
+        guard let snoozed = try? repo.takeSnoozeBuildReminders(), !snoozed.isEmpty else { return }
+        for reminder in snoozed where reminder.isPending {
+            guard let thread = repo.thread(account: reminder.account, threadId: reminder.threadId) else { continue }
+            let snapshots = (try? repo.modifyThread(account: reminder.account, threadId: reminder.threadId, add: [SystemLabel.inbox], remove: [])) ?? []
+            remote(thread, rollback: snapshots) { try await $0.modifyThread(id: reminder.threadId, add: [SystemLabel.inbox], remove: []) }
+        }
+        reload()
+    }
+
+    /// Sets off every reminder that's due, and drops reminders with nothing left to do.
+    private func wakeDueReminders() {
+        let now = Date()
+        let settled = (try? repo.settleReminders()) ?? 0
+        let due = repo.dueReminders(at: now)
+        for reminder in due { wake(reminder, at: now) }
+        if settled > 0 || !due.isEmpty { reload() }
+        scheduleReminders()
+    }
+
+    /// A notification, and the conversation at the top of the inbox, unread.
+    private func wake(_ reminder: Reminder, at now: Date) {
+        let messages = repo.threadMessages(account: reminder.account, threadId: reminder.threadId)
+        guard let latest = messages.last(where: { !$0.labels.contains(SystemLabel.trash) }),
+              let thread = repo.thread(account: reminder.account, threadId: reminder.threadId) else {
+            // Deleted or in the trash: nothing to remind you about.
+            try? repo.removeReminder(account: reminder.account, threadId: reminder.threadId)
+            return
+        }
+        let snapshots = (try? repo.modifyThread(account: reminder.account, threadId: reminder.threadId, add: [SystemLabel.inbox], remove: [])) ?? []
+        _ = try? repo.modifyMessage(account: reminder.account, id: latest.id, add: [SystemLabel.unread], remove: [])
+        try? repo.markReminderWoken(account: reminder.account, threadId: reminder.threadId, at: now)
+        // Who it's from, or for a follow-up, who you're waiting on.
+        let person = reminder.kind == .followUp
+            ? Addresses.parseList(latest.to).first.map { Addresses.displayName(name: $0.name, email: $0.email) } ?? ""
+            : messages.last(where: { $0.fromEmail.lowercased() != reminder.account.lowercased() })
+                .map { Addresses.displayName(name: $0.fromName, email: $0.fromEmail) } ?? ""
+        ReminderNotifier.shared.notify(reminder, subject: thread.subject, from: person)
+        let latestId = latest.id
+        // If Gmail can't be reached, the reminder waits and goes off again on the next check.
+        remote(thread, rollback: snapshots, onFailure: { [weak self] in try? self?.repo.setReminder(reminder) }) { service in
+            try await service.modifyThread(id: reminder.threadId, add: [SystemLabel.inbox], remove: [])
+            try await service.modifyMessage(id: latestId, add: [SystemLabel.unread], remove: [])
+        }
+    }
+
+    /// Demo only: the soonest reminder goes off in a couple of seconds, to check what happens when one does.
+    func demoWakeSoon() {
+        guard isDemo, let next = repo.threads(ThreadQuery(mailbox: .reminders)).first?.reminder else { return }
+        var soon = next
+        soon.due = Date().addingTimeInterval(2)
+        try? repo.setReminder(soon)
+        scheduleReminders()
+    }
+
+    /// Wakes up when the next reminder is due. Syncs check too, so a missed wake-up (the Mac was asleep) is caught.
+    private func scheduleReminders() {
+        reminderTimer?.cancel()
+        guard let next = repo.nextReminderDue() else { return }
+        let delay = max(0, next.timeIntervalSinceNow) + 0.5
+        reminderTimer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.wakeDueReminders()
+        }
     }
 
     // MARK: Compose
@@ -1030,15 +1160,26 @@ final class AppStore: ObservableObject {
                 let service = try await sync.service(for: draft.from)
                 let raw = try await rawMessage(draft, fromName: name)
                 // A Gmail draft is sent as that draft, so it leaves Drafts everywhere instead of lingering there.
+                let threadId: String?
                 if let messageId = draft.gmailDraftMessageId, let id = try await service.draftID(messageId: messageId) {
                     try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
-                    try await service.sendDraft(id: id)
+                    threadId = try await service.sendDraft(id: id) ?? draft.threadId
                     try? repo.deleteMessages(account: draft.from, ids: [messageId])
                     reload()
                 } else {
-                    try await service.send(raw: raw, threadId: draft.threadId)
+                    threadId = try await service.send(raw: raw, threadId: draft.threadId)
                 }
-                showToast("Sent")
+                if let after = draft.followUpAfter, let threadId {
+                    let sentAt = Date()
+                    try? repo.setReminder(Reminder(
+                        account: draft.from, threadId: threadId, kind: .followUp, due: sentAt.addingTimeInterval(after), since: sentAt
+                    ))
+                    scheduleReminders()
+                    ReminderNotifier.shared.requestPermission()
+                    showToast("Sent. Reminding you \(ReminderTime.describe(sentAt.addingTimeInterval(after))) if there's no reply")
+                } else {
+                    showToast("Sent")
+                }
                 syncNow()
             } catch {
                 sendingDrafts.remove(draft.id)
@@ -1179,6 +1320,9 @@ final class AppStore: ObservableObject {
         if currentThread != nil {
             commands += [
                 PaletteCommand(title: "Mark done", section: "Conversation", systemImage: "checkmark", shortcut: "E") { [weak self] in self?.archive() },
+                PaletteCommand(title: "Remind me…", section: "Conversation", systemImage: "bell", shortcut: "H") { [weak self] in
+                    DispatchQueue.main.async { self?.showReminderPicker() }
+                },
                 PaletteCommand(title: "Reply", section: "Conversation", systemImage: "arrowshape.turn.up.left", shortcut: "R") { [weak self] in self?.reply(.reply) },
                 PaletteCommand(title: "Reply all", section: "Conversation", systemImage: "arrowshape.turn.up.left.2", shortcut: "A") { [weak self] in self?.reply(.replyAll) },
                 PaletteCommand(title: "Forward", section: "Conversation", systemImage: "arrowshape.turn.up.right", shortcut: "F") { [weak self] in self?.reply(.forward) },
@@ -1189,6 +1333,11 @@ final class AppStore: ObservableObject {
                 },
                 PaletteCommand(title: "Move to Trash", section: "Conversation", systemImage: "trash", shortcut: "#") { [weak self] in self?.trash() },
             ]
+            if let thread = currentThread, let reminder = thread.reminder, reminder.isPending {
+                commands.append(PaletteCommand(
+                    title: "Remove reminder", section: "Conversation", systemImage: "bell.slash", shortcut: nil
+                ) { [weak self] in self?.removeReminder(thread) })
+            }
             let files = openAttachments
             if let first = files.first {
                 commands += [

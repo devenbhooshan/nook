@@ -12,37 +12,49 @@ enum DemoData {
     }
 
     /// In demo mode: `--open <n>` opens the nth conversation, `--compose` starts a reply, `--reply-body <text>` opens a reply prefilled the way an assistant's draft arrives, `--to <text>` starts a new message with that typed in To,
-    /// `--palette` shows the command palette, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
+    /// `--palette` shows the command palette, `--wake-soon` makes the next reminder go off in two seconds, `--unread` turns on the unread filter, `--split <tag>` opens a tab,
     /// `--onboarding [connect|tagging]` shows an onboarding step (the assistant step by default), `--client-help` opens the Google client steps,
     /// `--keys down,space,…` presses keys once the window is up (in the compose sheet, when one is open), `--swipe` swipes back,
     /// `--notices` shows the signed-out and photo notices, `--snapshot <file.png>` saves the window, even on another Space, and `--dark` forces dark mode. Used for screenshots and for checking input handling.
     /// Queues real key events, so they go through the same monitors as typing.
     private static func pressKeys(_ keys: [String], in store: AppStore) {
         guard let main = store.mainWindow else { return }
-        let window = main.attachedSheet ?? main
         let codes: [String: (UInt16, String)] = [
             "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "space": (49, " "),
             "pagedown": (121, "\u{F72D}"), "pageup": (116, "\u{F72C}"), "home": (115, "\u{F729}"), "end": (119, "\u{F72B}"),
             "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
             "return": (36, "\r"), "tab": (48, "\t"),
         ]
-        let letters: [String: UInt16] = ["a": 0, "f": 3, "k": 40, "j": 38]
-        for entry in keys {
-            // "cmd-shift-a" style: modifiers, then the key.
-            var parts = entry.split(separator: "-").map(String.init)
-            let key = parts.removeLast()
-            var flags: NSEvent.ModifierFlags = []
-            if parts.contains("cmd") { flags.insert(.command) }
-            if parts.contains("shift") { flags.insert(.shift) }
-            guard let (code, characters) = codes[key] ?? letters[key].map({ ($0, key) }) else { continue }
-            for down in [true, false] {
-                guard let event = NSEvent.keyEvent(
-                    with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
-                    windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
-                    isARepeat: false, keyCode: code
-                ) else { continue }
-                NSApp.postEvent(event, atStart: false)
+        // US key codes, so typed text and single-key shortcuts can be checked.
+        let letters: [String: UInt16] = [
+            "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14,
+            "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "9": 25, "7": 26, "8": 28, "0": 29,
+            "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
+        ]
+        // A beat between keys, like a person typing, so a key that opens something lands before the next one.
+        for (index, entry) in keys.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25 * Double(index)) {
+                // Whichever window is in front by then: a key may have opened a sheet.
+                press(entry, in: main.attachedSheet ?? main, codes: codes, letters: letters)
             }
+        }
+    }
+
+    private static func press(_ entry: String, in window: NSWindow, codes: [String: (UInt16, String)], letters: [String: UInt16]) {
+        // "cmd-shift-a" style: modifiers, then the key.
+        var parts = entry.split(separator: "-").map(String.init)
+        let key = parts.removeLast()
+        var flags: NSEvent.ModifierFlags = []
+        if parts.contains("cmd") { flags.insert(.command) }
+        if parts.contains("shift") { flags.insert(.shift) }
+        guard let (code, characters) = codes[key] ?? letters[key].map({ ($0, key) }) else { return }
+        for down in [true, false] {
+            guard let event = NSEvent.keyEvent(
+                with: down ? .keyDown : .keyUp, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters,
+                isARepeat: false, keyCode: code
+            ) else { continue }
+            NSApp.postEvent(event, atStart: false)
         }
     }
 
@@ -133,6 +145,7 @@ enum DemoData {
             store.handle(NookURL.compose(from: nil, to: arguments[flag + 1], cc: "", subject: "", body: "").url)
         }
         if arguments.contains("--palette") { store.openPalette() }
+        if arguments.contains("--wake-soon") { store.demoWakeSoon() }
         if arguments.contains("--unread") { store.toggleUnreadOnly() }
         if arguments.contains("--settings") {
             // Same path as the "Sign in again…" button, so it can be checked without clicking.
@@ -144,12 +157,14 @@ enum DemoData {
         if let flag = arguments.firstIndex(of: "--keys"), arguments.indices.contains(flag + 1) {
             let keys = arguments[flag + 1].split(separator: ",").map(String.init)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { pressKeys(keys, in: store) }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { reportReader(store) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + 0.25 * Double(keys.count)) { reportReader(store) }
         }
         if let flag = arguments.firstIndex(of: "--click"), arguments.indices.contains(flag + 1) {
-            let values = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
-            if values.count == 2 {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { click(at: CGPoint(x: values[0], y: values[1]), in: store) }
+            // Several points, "x,y/x,y", are clicked two seconds apart.
+            for (index, point) in arguments[flag + 1].split(separator: "/").enumerated() {
+                let values = point.split(separator: ",").compactMap { Double($0) }
+                guard values.count == 2 else { continue }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5 + 2 * Double(index)) { click(at: CGPoint(x: values[0], y: values[1]), in: store) }
             }
         }
         if let flag = arguments.firstIndex(of: "--attach"), arguments.indices.contains(flag + 1) {
@@ -169,7 +184,9 @@ enum DemoData {
         }
         if let flag = arguments.firstIndex(of: "--snapshot"), arguments.indices.contains(flag + 1) {
             let path = arguments[flag + 1]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { snapshot(store, to: path) }
+            // After any keys have been typed.
+            let keys = arguments.firstIndex(of: "--keys").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1].split(separator: ",").count : nil } ?? 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3 + 0.25 * Double(keys)) { snapshot(store, to: path) }
         }
         if let flag = arguments.firstIndex(of: "--onboarding") {
             let name = arguments.indices.contains(flag + 1) ? arguments[flag + 1] : ""
@@ -211,15 +228,16 @@ enum DemoData {
         func message(
             _ id: String, _ account: String, thread: String? = nil, from: (String, String), subject: String, body: String,
             hoursAgo: Double, unread: Bool = false, starred: Bool = false, inbox: Bool = true, html: String = "", tags: [String] = [],
-            files: [Attachment] = []
+            files: [Attachment] = [], to: String? = nil
         ) -> (MailMessage, [String]) {
             var labels: Set<String> = []
+            if to != nil { labels.insert(SystemLabel.sent) }
             if inbox { labels.insert(SystemLabel.inbox) }
             if unread { labels.insert(SystemLabel.unread) }
             if starred { labels.insert(SystemLabel.starred) }
             let message = MailMessage(
                 id: id, account: account, threadId: thread ?? id, fromName: from.0, fromEmail: from.1,
-                to: "Sam Rivera <\(account)>", subject: subject, snippet: String(body.replacingOccurrences(of: "\n", with: " ").prefix(120)),
+                to: to ?? "Sam Rivera <\(account)>", subject: subject, snippet: String(body.replacingOccurrences(of: "\n", with: " ").prefix(120)),
                 bodyHTML: html, bodyText: body, date: now.addingTimeInterval(-hoursAgo * 3600), labels: labels,
                 messageIdHeader: "<\(id)@demo.example>", attachments: files
             )
@@ -261,12 +279,31 @@ enum DemoData {
                     ]),
             message("w5", work, from: ("Figma", "no-reply@figma.example"), subject: "Priya mentioned you in Nook — Reader v3",
                     body: "@sam can we tighten the spacing between message cards?", hoursAgo: 120, tags: ["Notification"]),
+            message("w6", work, from: ("Sam Rivera", work), subject: "Contract renewal terms",
+                    body: "Hi Dana,\n\nAttached are our proposed terms for next year. Could you let me know by Friday whether they work on your side?\n\nThanks,\nSam",
+                    hoursAgo: 20, inbox: false, to: "Dana Whitfield <dana@lumacorp.example>"),
+            message("w7", work, from: ("Sam Rivera", work), subject: "Invoice #2291",
+                    body: "Hi Marcus,\n\nJust checking whether invoice #2291 went through on your end. It's showing as outstanding here.\n\nSam",
+                    hoursAgo: 96, to: "Marcus Bell <marcus@vendorly.example>"),
         ]
 
         try? repo.upsert(samples.map(\.0))
         for (message, tags) in samples {
             try? repo.setAutoTags(tags, account: message.account, messageId: message.id)
         }
+
+        // Reminders: two waiting, a follow-up waiting, and a follow-up that just went off with no reply.
+        for (account, thread, text) in [(work, "w3", "tomorrow"), (personal, "p5", "next week")] {
+            if let due = ReminderTime.parse(text, now: now) {
+                try? repo.setReminder(Reminder(account: account, threadId: thread, kind: .remind, due: due))
+            }
+        }
+        let sent = now.addingTimeInterval(-20 * 3600)
+        try? repo.setReminder(Reminder(account: work, threadId: "w6", kind: .followUp, due: sent.addingTimeInterval(3 * 86_400), since: sent))
+        try? repo.setReminder(Reminder(
+            account: work, threadId: "w7", kind: .followUp, due: now.addingTimeInterval(-600),
+            since: now.addingTimeInterval(-96 * 3600), wokeAt: now.addingTimeInterval(-600)
+        ))
     }
 }
 
@@ -280,10 +317,10 @@ struct OfflineGmail: GmailService {
     func modifyMessage(id: String, add: [String], remove: [String]) async throws {}
     func trashThread(id: String) async throws {}
     func untrashThread(id: String) async throws {}
-    func send(raw: String, threadId: String?) async throws {}
+    func send(raw: String, threadId: String?) async throws -> String? { threadId }
     func draftID(messageId: String) async throws -> String? { nil }
     func updateDraft(id: String, raw: String, threadId: String?) async throws {}
-    func sendDraft(id: String) async throws {}
+    func sendDraft(id: String) async throws -> String? { nil }
     func attachment(messageId: String, attachmentId: String) async throws -> Data {
         guard let data = DemoAttachments.data(for: attachmentId) else { throw GmailError.notFound }
         return data

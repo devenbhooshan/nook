@@ -17,6 +17,7 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
 - **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
+- **Reminders.** Press `h` to be reminded about a conversation at a time you pick or type ("fri 2pm", "3d"): a notification, and the conversation at the top of your inbox. When you send, ask to be reminded if nobody replies.
 - **Attachments, done properly.** Images and PDFs show a preview under the message. Click for Quick Look, double-click to open, drag to Finder, or save everything to Downloads. Images pasted into an email show where the sender put them. Attach files with `⌘⇧A` or by dropping them on the message, and forwarding keeps the original files.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
@@ -112,9 +113,10 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 | `/` | Search | `u` | Toggle read | `f` | Forward |
 | `⌘K` | Command palette | `l` | Tag | `⌘↵` | Send |
 | `⌘0`–`⌘9` | All accounts / one account | `z` | Undo | `?` | All shortcuts |
-| `⌘\` | Show or hide sidebar | | | `⌘⇧A` | Attach files |
+| `⌘\` | Show or hide sidebar | `h` | Remind me | `⌘⇧A` | Attach files |
+| | | | | `⌘⇧R` | Remind me if no reply |
 
-Go-to sequences: `g i` inbox, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
+Go-to sequences: `g i` inbox, `g h` reminders, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
 
 In the ⌘K palette, the command you usually pick for the letters you type comes first: pick Move to Trash after typing `t` a couple of times, and `t` `↵` trashes. With nothing typed, the list keeps its fixed order.
 
@@ -123,6 +125,18 @@ In an open conversation, `↑` / `↓` scroll it, `space` / `⇧space` and Page 
 ## Reading and replying
 
 Reply, Reply all and Forward stay pinned at the bottom of a conversation, so they're in reach however long it gets. The earlier messages a reply quotes are folded behind a `•••` button, the way Gmail does it; click it to read them. Replies open with an empty page: the message you're answering is folded under what you write, and goes out below it when you send.
+
+## Reminders
+
+Press `h` on a conversation (or the bell in its toolbar) to be reminded about it. Pick later today, tomorrow morning, this weekend, next week or next month, or type a time: `2h`, `3d`, `fri`, `tomorrow 3pm`, `dec 5`. A day without a time means 8 AM. Nothing else changes: the conversation stays where it is, with a small bell beside it.
+
+When the time comes, you get a notification (click it to open the conversation), and the conversation moves to the top of your inbox, unread. macOS asks once whether Nook may send notifications, the first time you set a reminder.
+
+To be reminded about something you sent, click the bell in the compose window (or press `⌘⇧R` to step through 1 day, 2 days, 3 days and 1 week). If nobody has replied by then, you get a notification and the conversation comes back to your inbox marked **No reply**. A reply cancels it.
+
+**Reminders** (`g h`) lists everything waiting, soonest first. Press `h` on one to change its time or remove it, or `e` to remove it. Searching with `in:reminders` finds them too.
+
+Reminders live on this Mac, because Gmail has no reminders of its own. They go off while Nook is running; anything due while your Mac was off goes off as soon as Nook opens.
 
 ## Attachments
 
@@ -271,7 +285,7 @@ swift run Nook --demo --open 0 --compose --attach README.md --snapshot out.png  
 open -n --stdout out.txt build/Nook.app --args --demo --open 0 --click 293,553 --report-windows   # same, against the signed app
 ```
 
-`--click x,y` is in points from the top left of the window, or of the sheet when one is open. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
+`--click x,y` is in points from the top left of the window, or of the sheet when one is open; `x,y/x,y` clicks several points two seconds apart. `--keys` presses one key every quarter second, so a key that opens something (`h` for the reminder picker) lands before the next. `--wake-soon` makes the next reminder go off two seconds after launch. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
 
 `build-app.sh` signs with the most stable identity it finds: `$NOOK_SIGN_IDENTITY`, then a **Developer ID Application** certificate in your keychain, then the local certificate from `setup-signing.sh`, then ad hoc. Have one of the first three in place before you connect real accounts. Ad hoc builds look like a new app to macOS on every rebuild, so Keychain asks you to approve access to Nook's saved sign-ins each time.
 
@@ -298,8 +312,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Roadmap
 
-1. **Snooze and reminders** (top priority)
-2. Rich-text compose, signatures, send later, undo send
+1. Rich-text compose, signatures, send later, undo send
 
 ## License
 

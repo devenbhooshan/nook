@@ -98,6 +98,7 @@ public final class MailRepository: @unchecked Sendable {
             try db.execute("DELETE FROM fts_map WHERE account = ?", [email])
             try db.execute("DELETE FROM threads WHERE account = ?", [email])
             try db.execute("DELETE FROM thread_tags WHERE account = ?", [email])
+            try db.execute("DELETE FROM reminders WHERE account = ?", [email])
             try db.execute("DELETE FROM accounts WHERE email = ?", [email])
         }
     }
@@ -318,6 +319,9 @@ public final class MailRepository: @unchecked Sendable {
     public func threads(_ query: ThreadQuery) -> [ThreadSummary] {
         if query.search != nil { return searchThreads(query) }
         if query.mailbox == .drafts { return drafts(query) }
+        if query.mailbox == .reminders {
+            return summaries(for: pendingReminderKeys(account: query.account, limit: query.limit), mailbox: .all)
+        }
         let keys = pageOfThreads(query)
         return summaries(for: keys, mailbox: query.effectiveMailbox)
     }
@@ -327,8 +331,8 @@ public final class MailRepository: @unchecked Sendable {
         switch mailbox {
         case .inbox: "in_inbox"
         case .sent: "in_sent"
-        // Drafts aren't part of conversations; `drafts(_:)` lists them.
-        case .drafts: "0"
+        // Drafts aren't part of conversations; `drafts(_:)` lists them. Reminders have their own table.
+        case .drafts, .reminders: "0"
         case .starred: "starred"
         case .trash: "in_trash"
         case .all: "visible"
@@ -427,7 +431,11 @@ public final class MailRepository: @unchecked Sendable {
         }
         var ordered = keys.compactMap { byID[$0.id] }
         let tags = threadTags(for: keys)
-        for index in ordered.indices { ordered[index].tags = tags[ordered[index].id] ?? [] }
+        let reminders = reminders(for: keys)
+        for index in ordered.indices {
+            ordered[index].tags = tags[ordered[index].id] ?? []
+            ordered[index].reminder = reminders[ordered[index].id]
+        }
         return ordered
     }
 
@@ -451,6 +459,9 @@ public final class MailRepository: @unchecked Sendable {
         if let label = mailbox.gmailLabel {
             clauses.append("m.labels LIKE ?")
             arguments.append("%,\(label),%")
+        }
+        if mailbox == .reminders {
+            clauses.append("EXISTS (SELECT 1 FROM reminders r WHERE r.account = m.account AND r.thread_id = m.thread_id AND r.woke_at IS NULL)")
         }
         if let account = query.account {
             clauses.append("m.account = ?")
@@ -515,8 +526,13 @@ public final class MailRepository: @unchecked Sendable {
         arguments.append(query.limit)
 
         var summaries = ((try? reader.query(sql, arguments)) ?? []).map(Self.summary(from:))
-        let tags = threadTags(for: summaries.map { ThreadKey(account: $0.account, threadId: $0.threadId) })
-        for index in summaries.indices { summaries[index].tags = tags[summaries[index].id] ?? [] }
+        let keys = summaries.map { ThreadKey(account: $0.account, threadId: $0.threadId) }
+        let tags = threadTags(for: keys)
+        let reminders = reminders(for: keys)
+        for index in summaries.indices {
+            summaries[index].tags = tags[summaries[index].id] ?? []
+            summaries[index].reminder = reminders[summaries[index].id]
+        }
         return summaries
     }
 
@@ -591,6 +607,142 @@ public final class MailRepository: @unchecked Sendable {
             total: totals?.int("total") ?? 0,
             tags: Dictionary(uniqueKeysWithValues: rows.map { ($0.string("tag"), $0.int("n")) }),
             other: totals?.int("other") ?? 0
+        )
+    }
+
+    // MARK: Reminders
+
+    /// Sets the conversation's reminder, replacing any it had.
+    public func setReminder(_ reminder: Reminder) throws {
+        try db.transaction {
+            try db.execute(
+                "INSERT OR REPLACE INTO reminders(account, thread_id, kind, due, since, woke_at) VALUES (?, ?, ?, ?, ?, ?)",
+                [reminder.account, reminder.threadId, reminder.kind.rawValue, reminder.due, reminder.since, reminder.wokeAt]
+            )
+            try ThreadIndex.refresh(db, [ThreadKey(account: reminder.account, threadId: reminder.threadId)])
+        }
+    }
+
+    /// Removes the conversation's reminder. Returns it, for undo.
+    @discardableResult
+    public func removeReminder(account: String, threadId: String) throws -> Reminder? {
+        try db.transaction {
+            guard let existing = try db.query("SELECT * FROM reminders WHERE account = ? AND thread_id = ?", [account, threadId])
+                .first.map(Self.reminder(from:)) else { return nil }
+            try db.execute("DELETE FROM reminders WHERE account = ? AND thread_id = ?", [account, threadId])
+            try ThreadIndex.refresh(db, [ThreadKey(account: account, threadId: threadId)])
+            return existing
+        }
+    }
+
+    public func reminder(account: String, threadId: String) -> Reminder? {
+        (try? reader.query("SELECT * FROM reminders WHERE account = ? AND thread_id = ?", [account, threadId]))?.first.map(Self.reminder(from:))
+    }
+
+    /// Reminders whose time has come, soonest first.
+    public func dueReminders(at now: Date) -> [Reminder] {
+        let rows = (try? db.query("SELECT * FROM reminders WHERE woke_at IS NULL AND due <= ? ORDER BY due", [now])) ?? []
+        return rows.map(Self.reminder(from:))
+    }
+
+    /// When the next reminder goes off, for scheduling a wake-up.
+    public func nextReminderDue() -> Date? {
+        guard let row = (try? db.query("SELECT MIN(due) AS due FROM reminders WHERE woke_at IS NULL"))?.first, !row.isNull("due") else { return nil }
+        return Date(timeIntervalSince1970: row.double("due"))
+    }
+
+    /// Records that a reminder went off, which moves its conversation to the top of the list.
+    public func markReminderWoken(account: String, threadId: String, at date: Date) throws {
+        try db.transaction {
+            try db.execute("UPDATE reminders SET woke_at = ? WHERE account = ? AND thread_id = ?", [date, account, threadId])
+            try ThreadIndex.refresh(db, [ThreadKey(account: account, threadId: threadId)])
+        }
+    }
+
+    /// Drops reminders that no longer have anything to do:
+    ///
+    /// - a follow-up someone has replied to;
+    /// - one that went off and has since been dealt with (it left the inbox) or answered.
+    ///
+    /// Returns how many were dropped.
+    @discardableResult
+    public func settleReminders() throws -> Int {
+        try db.transaction {
+            let answered = """
+            EXISTS (SELECT 1 FROM messages m WHERE m.account = r.account AND m.thread_id = r.thread_id AND m.date > r.since
+                    AND m.labels NOT LIKE '%,SENT,%' AND m.labels NOT LIKE '%,DRAFT,%' AND m.labels NOT LIKE '%,SPAM,%')
+            """
+            let inInbox = "EXISTS (SELECT 1 FROM threads t WHERE t.account = r.account AND t.thread_id = r.thread_id AND t.in_inbox = 1)"
+            let rows = try db.query("""
+            SELECT r.account, r.thread_id FROM reminders r WHERE
+                (r.kind = 'followup' AND r.since IS NOT NULL AND \(answered))
+                OR (r.woke_at IS NOT NULL AND NOT \(inInbox))
+            """)
+            let keys = Set(rows.map { ThreadKey(account: $0.string("account"), threadId: $0.string("thread_id")) })
+            for key in keys {
+                try db.execute("DELETE FROM reminders WHERE account = ? AND thread_id = ?", [key.account, key.threadId])
+            }
+            try ThreadIndex.refresh(db, keys)
+            return keys.count
+        }
+    }
+
+    /// Reminders set by the short-lived snooze build, which also archived their conversations. Marks them as plain
+    /// reminders and returns them, so the caller can put those conversations back in the inbox. Runs once: afterwards
+    /// there are none left to find.
+    public func takeSnoozeBuildReminders() throws -> [Reminder] {
+        try db.transaction {
+            let rows = try db.query("SELECT * FROM reminders WHERE kind = 'snooze'")
+            try db.execute("UPDATE reminders SET kind = 'remind' WHERE kind = 'snooze'")
+            return rows.map(Self.reminder(from:))
+        }
+    }
+
+    /// Conversations with a reminder still to go off, soonest first.
+    private func pendingReminderKeys(account: String?, limit: Int) -> [ThreadKey] {
+        var clauses = ["r.woke_at IS NULL", "t.visible = 1"]
+        var arguments: [Any?] = []
+        if let account {
+            clauses.append("r.account = ?")
+            arguments.append(account)
+        }
+        arguments.append(limit)
+        let rows = (try? reader.query(
+            """
+            SELECT r.account, r.thread_id FROM reminders r JOIN threads t ON t.account = r.account AND t.thread_id = r.thread_id
+            WHERE \(clauses.joined(separator: " AND ")) ORDER BY r.due LIMIT ?
+            """,
+            arguments
+        )) ?? []
+        return rows.map { ThreadKey(account: $0.string("account"), threadId: $0.string("thread_id")) }
+    }
+
+    private func reminders(for keys: [ThreadKey]) -> [String: Reminder] {
+        guard !keys.isEmpty else { return [:] }
+        var result: [String: Reminder] = [:]
+        for start in stride(from: 0, to: keys.count, by: 200) {
+            let chunk = keys[start..<min(start + 200, keys.count)]
+            let values = Array(repeating: "(?, ?)", count: chunk.count).joined(separator: ", ")
+            let arguments: [Any?] = chunk.flatMap { [$0.account, $0.threadId] as [Any?] }
+            let rows = (try? reader.query("""
+            WITH k(account, thread_id) AS (VALUES \(values))
+            SELECT r.* FROM k JOIN reminders r ON r.account = k.account AND r.thread_id = k.thread_id
+            """, arguments)) ?? []
+            for reminder in rows.map(Self.reminder(from:)) {
+                result["\(reminder.account)/\(reminder.threadId)"] = reminder
+            }
+        }
+        return result
+    }
+
+    private static func reminder(from row: Row) -> Reminder {
+        Reminder(
+            account: row.string("account"),
+            threadId: row.string("thread_id"),
+            kind: Reminder.Kind(stored: row.string("kind")),
+            due: Date(timeIntervalSince1970: row.double("due")),
+            since: row.isNull("since") ? nil : Date(timeIntervalSince1970: row.double("since")),
+            wokeAt: row.isNull("woke_at") ? nil : Date(timeIntervalSince1970: row.double("woke_at"))
         )
     }
 

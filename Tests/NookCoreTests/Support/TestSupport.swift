@@ -120,13 +120,14 @@ actor FakeGmail: GmailService {
     func trashThread(id: String) async throws {}
     func untrashThread(id: String) async throws {}
 
-    func send(raw: String, threadId: String?) async throws {
+    func send(raw: String, threadId: String?) async throws -> String? {
         sent.append((raw, threadId))
+        return threadId ?? "sent-thread"
     }
 
     func draftID(messageId: String) async throws -> String? { "draft-\(messageId)" }
     func updateDraft(id: String, raw: String, threadId: String?) async throws {}
-    func sendDraft(id: String) async throws {}
+    func sendDraft(id: String) async throws -> String? { nil }
 
     var attachmentData: [String: Data] = [:]
     func setAttachment(_ id: String, data: Data) { attachmentData[id] = data }

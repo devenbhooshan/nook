@@ -42,6 +42,22 @@ enum ThreadIndex {
         PRIMARY KEY(account, thread_id, tag)
     );
     CREATE INDEX IF NOT EXISTS thread_tags_tag ON thread_tags(tag);
+    \(remindersSQL)
+    """
+
+    /// Reminders and follow-ups, one per conversation. Here because a reminder that went off moves its conversation
+    /// to the top of the list, so building the index reads it.
+    static let remindersSQL = """
+    CREATE TABLE IF NOT EXISTS reminders(
+        account TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        due REAL NOT NULL,
+        since REAL,
+        woke_at REAL,
+        PRIMARY KEY(account, thread_id)
+    );
+    CREATE INDEX IF NOT EXISTS reminders_due ON reminders(due);
     """
 
     /// Spam and drafts never appear anywhere.
@@ -49,7 +65,8 @@ enum ThreadIndex {
 
     private static let aggregate = """
     SELECT m.account, m.thread_id,
-           COALESCE(MAX(CASE WHEN m.labels NOT LIKE '%,TRASH,%' THEN m.date END), MAX(m.date)),
+           MAX(COALESCE(MAX(CASE WHEN m.labels NOT LIKE '%,TRASH,%' THEN m.date END), MAX(m.date)),
+               COALESCE((SELECT r.woke_at FROM reminders r WHERE r.account = m.account AND r.thread_id = m.thread_id), 0)),
            MAX(m.labels LIKE '%,INBOX,%' AND m.labels NOT LIKE '%,TRASH,%'),
            MAX(m.labels LIKE '%,SENT,%' AND m.labels NOT LIKE '%,TRASH,%'),
            MAX(m.labels LIKE '%,STARRED,%' AND m.labels NOT LIKE '%,TRASH,%'),

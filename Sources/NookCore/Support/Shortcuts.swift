@@ -3,7 +3,7 @@ import Foundation
 /// Everything the keyboard can do in the mail view.
 public enum KeyCommand: Equatable, Sendable {
     case next, previous, open, close
-    case archive, trash, toggleStar, toggleRead
+    case archive, trash, toggleStar, toggleRead, remind
     case reply, replyAll, forward, compose
     case search, commandPalette, tagPicker, help, undo
     case nextSplit, previousSplit
@@ -18,7 +18,7 @@ public enum KeyCommand: Equatable, Sendable {
 }
 
 /// Turns single key presses into commands. Superhuman-style: one key per action, and `g` starts
-/// a two-key "go to" sequence (`g i` inbox, `g s` starred, `g t` sent, `g a` all mail, `g #` trash).
+/// a two-key "go to" sequence (`g i` inbox, `g h` reminders, `g s` starred, `g t` sent, `g a` all mail, `g #` trash).
 public struct ShortcutInterpreter: Sendable {
     public enum KeyCode {
         public static let returnKey: UInt16 = 36
@@ -59,6 +59,7 @@ public struct ShortcutInterpreter: Sendable {
             if now.timeIntervalSince(started) <= sequenceTimeout {
                 switch characters {
                 case "i": return .go(.inbox)
+                case "h": return .go(.reminders)
                 case "s": return .go(.starred)
                 case "t": return .go(.sent)
                 case "d": return .go(.drafts)
@@ -85,6 +86,7 @@ public struct ShortcutInterpreter: Sendable {
         case "o": return .open
         case "e", "y": return .archive
         case "#": return .trash
+        case "h": return .remind
         case "s": return .toggleStar
         case "u": return .toggleRead
         case "U": return .toggleUnreadFilter
@@ -132,6 +134,7 @@ public struct ShortcutInterpreter: Sendable {
         ]),
         Section(title: "Act", entries: [
             Entry(keys: "e", title: "Mark done (archive)"),
+            Entry(keys: "h", title: "Remind me"),
             Entry(keys: "#", title: "Trash"),
             Entry(keys: "s", title: "Star"),
             Entry(keys: "u", title: "Toggle read"),
@@ -146,9 +149,11 @@ public struct ShortcutInterpreter: Sendable {
             Entry(keys: "⌘↵", title: "Send"),
             Entry(keys: "⌘⇧F", title: "Send from the next account"),
             Entry(keys: "⌘⇧A", title: "Attach files"),
+            Entry(keys: "⌘⇧R", title: "Remind me if no reply"),
         ]),
         Section(title: "Go to", entries: [
             Entry(keys: "g i", title: "Inbox"),
+            Entry(keys: "g h", title: "Reminders"),
             Entry(keys: "g s", title: "Starred"),
             Entry(keys: "g t", title: "Sent"),
             Entry(keys: "g d", title: "Drafts"),

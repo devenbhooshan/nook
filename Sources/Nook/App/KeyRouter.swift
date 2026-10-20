@@ -39,7 +39,7 @@ final class KeyRouter {
     /// Follows the "Swipe between pages" setting in System Settings.
     private func handleSwipe(_ event: NSEvent) {
         guard let store, store.openThread != nil, let window = event.window ?? NSApp.keyWindow, window === store.mainWindow,
-              window.attachedSheet == nil, store.draft == nil, !store.showPalette else { return }
+              window.attachedSheet == nil, store.draft == nil, !store.showPalette, store.reminderTarget == nil else { return }
 
         if event.type == .swipe {
             // Three-finger swipes, when the system is set to use them. A positive deltaX is the "back" direction.
@@ -96,7 +96,7 @@ final class KeyRouter {
         guard let store, let window = event.window, window === store.mainWindow, window.attachedSheet == nil else { return false }
         // During onboarding the inbox isn't on screen, so shortcuts would act on mail nobody can see.
         guard store.onboardingStep == .done else { return false }
-        guard !store.showPalette, store.draft == nil else { return false }
+        guard !store.showPalette, store.reminderTarget == nil, store.draft == nil else { return false }
         if let responder = window.firstResponder as? NSTextView, responder.isEditable { return false }
 
         // Command-key shortcuts belong to the menu bar. Option is allowed: some keyboard layouts need it to type "#".
@@ -140,6 +140,7 @@ final class KeyRouter {
         case .trash: store.trash()
         case .toggleStar: store.toggleStar()
         case .toggleRead: store.toggleRead()
+        case .remind: store.showReminderPicker()
         case .reply: store.reply(.reply)
         case .replyAll: store.reply(.replyAll)
         case .forward: store.reply(.forward)
