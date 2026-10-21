@@ -7,9 +7,16 @@ final class ReminderNotifier: NSObject, UNUserNotificationCenterDelegate, @unche
     static let shared = ReminderNotifier()
 
     /// Notifications need an app bundle (`swift run` has none), and demo mode never asks for the real app's permission.
+    private var available: Bool {
+        Bundle.main.bundleIdentifier != nil && !CommandLine.arguments.contains("--demo")
+    }
+
+    /// Set once Nook has asked to notify you. Until then it leaves the notification system alone: once an app uses it,
+    /// macOS shows that app's Dock badge only with badge permission, so touching it early would hide the unread count.
+    private static let askedKey = "notifications.asked"
+
     private var center: UNUserNotificationCenter? {
-        guard Bundle.main.bundleIdentifier != nil, !CommandLine.arguments.contains("--demo") else { return nil }
-        return .current()
+        available && UserDefaults.standard.bool(forKey: Self.askedKey) ? .current() : nil
     }
 
     func install() {
@@ -17,8 +24,16 @@ final class ReminderNotifier: NSObject, UNUserNotificationCenterDelegate, @unche
     }
 
     /// Asked the first time you set a reminder, not at launch: that's when it's clear why Nook wants to notify you.
+    /// Badges are part of it, so the unread count on the Dock icon keeps showing.
     func requestPermission() {
-        center?.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        guard available else { return }
+        UserDefaults.standard.set(true, forKey: Self.askedKey)
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+            // The badge was set before permission arrived; set it again so it shows.
+            DispatchQueue.main.async { AppStore.current?.refreshDockBadge() }
+        }
     }
 
     func notify(_ reminder: Reminder, subject: String, from: String) {

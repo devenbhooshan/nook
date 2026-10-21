@@ -752,6 +752,12 @@ final class AppStore: ObservableObject {
         if NSApp.dockTile.badgeLabel != label { NSApp.dockTile.badgeLabel = label }
     }
 
+    /// Sets the badge again from scratch, for after notification permission changes what macOS shows.
+    func refreshDockBadge() {
+        NSApp.dockTile.badgeLabel = nil
+        updateDockBadge()
+    }
+
     func account(for email: String) -> Account? {
         accounts.first { $0.email == email }
     }
