@@ -257,7 +257,11 @@ final class AppStore: ObservableObject {
             .store(in: &subscriptions)
 
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in self?.syncNow() }
+            .sink { [weak self] _ in
+                self?.syncNow()
+                // Badge permission may have changed in System Settings.
+                ReminderNotifier.shared.refreshBadgeSetting()
+            }
             .store(in: &subscriptions)
 
         keyRouter.install()

@@ -39,6 +39,7 @@ struct SettingsView: View {
 private struct GeneralSettings: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage(AppStore.dockBadgeKey) private var dockBadge = true
+    @ObservedObject private var notifier = ReminderNotifier.shared
     @State private var openAtLogin = SMAppService.mainApp.status == .enabled
     @State private var loginItemNote: String?
 
@@ -56,11 +57,23 @@ private struct GeneralSettings: View {
             Section {
                 Toggle("Show unread count on the Dock icon", isOn: $dockBadge)
                     .onChange(of: dockBadge) { store.updateDockBadge() }
+                if dockBadge && !notifier.badgesAllowed {
+                    HStack {
+                        Text("macOS is hiding the count: badges are off for Nook in Notifications.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Turn On…") { notifier.openNotificationSettings() }
+                    }
+                }
             } footer: {
                 Text("Counts unread conversations in your inboxes, across all accounts.")
             }
         }
         .formStyle(.grouped)
+        .onAppear { notifier.refreshBadgeSetting() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            notifier.refreshBadgeSetting()
+        }
     }
 
     private func setOpenAtLogin(_ enabled: Bool) {
