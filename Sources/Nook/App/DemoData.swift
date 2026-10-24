@@ -61,7 +61,10 @@ enum DemoData {
     /// Clicks at a point measured in points from the top left of the window (its sheet, when one is open).
     private static func click(at point: CGPoint, in store: AppStore) {
         guard let main = store.mainWindow else { return }
-        let window = main.attachedSheet ?? main
+        click(at: point, in: main.attachedSheet ?? main)
+    }
+
+    private static func click(at point: CGPoint, in window: NSWindow) {
         let location = NSPoint(x: point.x, y: window.frame.height - point.y)
         // Move there first and linger, the way a person does, so hover effects (tooltips) are part of the test.
         // Warping the real pointer is what makes tracking areas notice.
@@ -105,6 +108,13 @@ enum DemoData {
               let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+        // A reminder's alert, when one is up, goes next to it.
+        if let alert = ReminderAlerts.shared.visiblePanels.last?.contentView?.superview,
+           let picture = alert.bitmapImageRepForCachingDisplay(in: alert.bounds) {
+            alert.cacheDisplay(in: alert.bounds, to: picture)
+            try? picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-alert.png")))
+        }
+        print("demo: alerts=\(ReminderAlerts.shared.visiblePanels.count)")
         print("demo: snapshot=\(path)")
         fflush(stdout)
     }
@@ -146,7 +156,20 @@ enum DemoData {
         }
         if arguments.contains("--palette") { store.openPalette() }
         if arguments.contains("--wake-soon") { store.demoWakeSoon() }
+        if let flag = arguments.firstIndex(of: "--alert-click"), arguments.indices.contains(flag + 1) {
+            // Clicks in the newest reminder alert, once --wake-soon has set one off.
+            let values = arguments[flag + 1].split(separator: ",").compactMap { Double($0) }
+            if values.count == 2 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    if let panel = ReminderAlerts.shared.visiblePanels.last { click(at: CGPoint(x: values[0], y: values[1]), in: panel) }
+                }
+            }
+        }
         if arguments.contains("--unread") { store.toggleUnreadOnly() }
+        if let flag = arguments.firstIndex(of: "--image-sender"), arguments.indices.contains(flag + 1) {
+            // As if "Always load from…" had been picked for this address or domain.
+            store.defaults.set(ImageSenders.adding(arguments[flag + 1], to: ""), forKey: ImageSenders.storageKey)
+        }
         if arguments.contains("--settings") {
             // Same path as the "Sign in again…" button, so it can be checked without clicking.
             DispatchQueue.main.async { store.openSettings() }

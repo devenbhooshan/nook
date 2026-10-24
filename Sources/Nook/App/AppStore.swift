@@ -494,6 +494,7 @@ final class AppStore: ObservableObject {
         selectedID = thread.id
         if effectiveMailbox == .drafts { return openGmailDraft(thread) }
         if unreadOnly { keptVisible.insert(thread.id) }
+        ReminderAlerts.shared.dismiss(account: thread.account, threadId: thread.threadId)
         openThread = thread
         openMessages = repo.threadMessages(account: thread.account, threadId: thread.threadId)
         if thread.isUnread { markRead(thread) }
@@ -515,6 +516,11 @@ final class AppStore: ObservableObject {
     func closeThread() {
         openThread = nil
         openMessages = []
+        // Under "Unread only", what you read while in the reader leaves the list once you're back in it.
+        if !keptVisible.isEmpty {
+            keptVisible = []
+            reload()
+        }
     }
 
     /// Esc: close the thread, then clear the search, then go back to the whole inbox.
@@ -968,6 +974,18 @@ final class AppStore: ObservableObject {
         })
     }
 
+    /// "Later" on a reminder's alert.
+    func remindAgain(account: String, threadId: String, at date: Date) {
+        guard let thread = repo.thread(account: account, threadId: threadId) else { return }
+        remind(thread, at: date)
+    }
+
+    /// "Done" on a reminder's alert: archive the conversation.
+    func markDone(account: String, threadId: String) {
+        guard let thread = repo.thread(account: account, threadId: threadId) else { return }
+        changeLabels(thread, add: [], remove: [SystemLabel.inbox], message: "Marked done")
+    }
+
     /// Cancels a waiting reminder. The conversation stays where it is.
     func removeReminder(_ thread: ThreadSummary) {
         guard let removed = try? repo.removeReminder(account: thread.account, threadId: thread.threadId), removed.isPending else { return }
@@ -1019,7 +1037,7 @@ final class AppStore: ObservableObject {
             ? Addresses.parseList(latest.to).first.map { Addresses.displayName(name: $0.name, email: $0.email) } ?? ""
             : messages.last(where: { $0.fromEmail.lowercased() != reminder.account.lowercased() })
                 .map { Addresses.displayName(name: $0.fromName, email: $0.fromEmail) } ?? ""
-        ReminderNotifier.shared.notify(reminder, subject: thread.subject, from: person)
+        ReminderAlerts.shared.show(reminder, subject: thread.subject, person: person)
         let latestId = latest.id
         // If Gmail can't be reached, the reminder waits and goes off again on the next check.
         remote(thread, rollback: snapshots, onFailure: { [weak self] in try? self?.repo.setReminder(reminder) }) { service in

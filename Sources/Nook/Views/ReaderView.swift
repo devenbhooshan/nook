@@ -7,6 +7,7 @@ struct ReaderView: View {
     let thread: ThreadSummary
 
     @AppStorage("privacy.blockRemoteContent") private var blockRemoteContent = true
+    @AppStorage(ImageSenders.storageKey) private var imageSenders = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,13 +17,15 @@ struct ReaderView: View {
                     heading
                     if blockRemoteContent, hasBlockedContent {
                         remoteContentBanner
+                    } else if let entry = autoLoadedFrom {
+                        autoLoadedNote(entry)
                     }
                     VStack(spacing: 12) {
                         ForEach(Array(store.openMessages.enumerated()), id: \.element.id) { index, message in
                             MessageCard(
                                 message: message,
                                 startsExpanded: index == store.openMessages.count - 1 || message.isUnread,
-                                allowRemoteContent: allowRemote
+                                allowRemoteContent: allowsRemote(message)
                             )
                         }
                     }
@@ -54,8 +57,37 @@ struct ReaderView: View {
         !blockRemoteContent || store.remoteContentAllowed.contains(thread.id)
     }
 
-    private var hasBlockedContent: Bool {
-        !allowRemote && store.openMessages.contains(where: MessageRenderCache.containsRemoteContent)
+    private func allowsRemote(_ message: MailMessage) -> Bool {
+        allowRemote || ImageSenders.matches(message.fromEmail, in: ImageSenders.parse(imageSenders))
+    }
+
+    /// The first message whose images are held back, if any.
+    private var blockedMessage: MailMessage? {
+        store.openMessages.first { !allowsRemote($0) && MessageRenderCache.containsRemoteContent($0) }
+    }
+
+    private var hasBlockedContent: Bool { blockedMessage != nil }
+
+    /// The allowlist entry that loaded this conversation's images without asking, if one did.
+    private var autoLoadedFrom: String? {
+        guard blockRemoteContent, !allowRemote else { return nil }
+        let entries = ImageSenders.parse(imageSenders)
+        return store.openMessages.lazy
+            .filter(MessageRenderCache.containsRemoteContent)
+            .compactMap { ImageSenders.match($0.fromEmail, in: entries) }
+            .first
+    }
+
+    private func autoLoadedNote(_ entry: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+            Text(entry.contains("@") ? "Images from \(entry) load automatically." : "Images from anyone at \(entry) load automatically.")
+            Button("Stop") { imageSenders = ImageSenders.removing(entry, from: imageSenders) }
+                .buttonStyle(.textLink)
+                .clickable()
+        }
+        .font(.system(size: 11.5))
+        .foregroundStyle(.secondary)
     }
 
     // MARK: Pieces
@@ -159,10 +191,20 @@ struct ReaderView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Load images") {
+            Menu("Load images") {
+                if let sender = blockedMessage?.fromEmail.lowercased(), !sender.isEmpty {
+                    Button("Always load from \(sender)") { imageSenders = ImageSenders.adding(sender, to: imageSenders) }
+                    if let domain = ImageSenders.domain(of: sender) {
+                        Button("Always load from anyone at \(domain)") { imageSenders = ImageSenders.adding(domain, to: imageSenders) }
+                    }
+                }
+            } primaryAction: {
                 store.remoteContentAllowed.insert(thread.id)
             }
+            .menuStyle(.button)
+            .fixedSize()
             .controlSize(.small)
+            .help("Load them for this conversation, or always for this sender")
         }
         .padding(12)
         .background(Theme.accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -257,11 +299,10 @@ struct MessageCard: View {
                 HStack(spacing: 6) {
                     Text(Addresses.displayName(name: message.fromName, email: message.fromEmail))
                         .font(.system(size: 13.5, weight: .semibold))
+                        .contextMenu { copyMenu(name: message.fromName, email: message.fromEmail) }
                     if message.fromName != message.fromEmail {
-                        Text(message.fromEmail)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                        CopyableAddress(email: message.fromEmail)
+                            .contextMenu { copyMenu(name: message.fromName, email: message.fromEmail) }
                     }
                 }
                 if isExpanded {
@@ -270,6 +311,11 @@ struct MessageCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .contextMenu {
+                            ForEach(Array((Addresses.parseList(message.to) + Addresses.parseList(message.cc)).enumerated()), id: \.offset) { _, address in
+                                Button("Copy \(address.email)") { CopyableAddress.copy(address.email) }
+                            }
+                        }
                 } else {
                     Text(message.snippet)
                         .font(.system(size: 12.5))
@@ -308,11 +354,45 @@ struct MessageCard: View {
         }
     }
 
+    @ViewBuilder private func copyMenu(name: String, email: String) -> some View {
+        Button("Copy Address") { CopyableAddress.copy(email) }
+        if !name.isEmpty && name != email {
+            Button("Copy Name and Address") { CopyableAddress.copy("\(name) <\(email)>", shown: email) }
+        }
+    }
+
     private var recipients: String {
         let to = Addresses.parseList(message.to).map { Addresses.displayName(name: $0.name, email: $0.email) }
         let cc = Addresses.parseList(message.cc).map { Addresses.displayName(name: $0.name, email: $0.email) }
         var line = "to " + (to.isEmpty ? "undisclosed recipients" : to.joined(separator: ", "))
         if !cc.isEmpty { line += "  ·  cc " + cc.joined(separator: ", ") }
         return line
+    }
+}
+
+/// An email address you can click to copy, instead of the click opening or folding the message.
+struct CopyableAddress: View {
+    let email: String
+    @State private var hovering = false
+
+    var body: some View {
+        Button { Self.copy(email) } label: {
+            Text(email)
+                .font(.system(size: 12))
+                .foregroundStyle(hovering ? .secondary : .tertiary)
+                .underline(hovering)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .clickable()
+        .help("Click to copy")
+    }
+
+    static func copy(_ text: String, shown: String? = nil) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        AppStore.current?.showToast("Copied \(shown ?? text)")
     }
 }

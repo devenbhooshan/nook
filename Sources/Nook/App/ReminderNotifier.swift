@@ -2,7 +2,8 @@ import AppKit
 import NookCore
 import UserNotifications
 
-/// Shows a notification when a reminder goes off. Clicking it opens the conversation.
+/// Nook's notification permission, which the Dock badge depends on. Reminders show their own alert (`ReminderAlerts`);
+/// a notification delivered by an earlier build still opens its conversation when clicked.
 final class ReminderNotifier: NSObject, ObservableObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     static let shared = ReminderNotifier()
 
@@ -52,30 +53,6 @@ final class ReminderNotifier: NSObject, ObservableObject, UNUserNotificationCent
         let id = Bundle.main.bundleIdentifier ?? ""
         let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension?id=\(id)")!
         NSWorkspace.shared.open(url)
-    }
-
-    func notify(_ reminder: Reminder, subject: String, from: String) {
-        let content = UNMutableNotificationContent()
-        let subject = subject.isEmpty ? "(no subject)" : subject
-        switch reminder.kind {
-        case .remind:
-            content.title = "Reminder: \(subject)"
-            content.body = from.isEmpty ? "From your inbox" : "From \(from)"
-        case .followUp:
-            content.title = "No reply: \(subject)"
-            content.body = reminder.since.map { "You wrote \($0.formatted(.relative(presentation: .named)))" } ?? "Nobody has replied yet"
-        }
-        content.sound = .default
-        content.userInfo = ["account": reminder.account, "threadId": reminder.threadId]
-        guard let center else {
-            if CommandLine.arguments.contains("--demo") {
-                print("demo: notification=\(content.title) | \(content.body)")
-                fflush(stdout)
-            }
-            return
-        }
-        let request = UNNotificationRequest(identifier: "reminder-\(reminder.account)-\(reminder.threadId)", content: content, trigger: nil)
-        center.add(request) { _ in }
     }
 
     /// Show it even while Nook is in front: you asked to be reminded.
