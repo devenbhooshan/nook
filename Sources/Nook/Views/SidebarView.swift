@@ -25,8 +25,11 @@ struct SidebarView: View {
                                 title: mailbox.title,
                                 systemImage: mailbox.systemImage,
                                 hasUnread: mailbox == .inbox && inboxHasUnread,
-                                isSelected: store.mailbox == mailbox && (mailbox != .inbox || store.split == .everything) && !store.isSearching
+                                isSelected: !store.showCalendar && store.mailbox == mailbox && (mailbox != .inbox || store.split == .everything) && !store.isSearching
                             ) { store.setMailbox(mailbox) }
+                        }
+                        SidebarRow(title: "Calendar", systemImage: "calendar", hasUnread: false, isSelected: store.showCalendar) {
+                            store.openCalendar()
                         }
                     }
 

@@ -65,7 +65,7 @@ struct ShortcutTests {
     }
 
     @Test func referenceCoversEverySection() {
-        #expect(ShortcutInterpreter.reference.map(\.title) == ["Navigate", "Act", "Write", "Go to"])
+        #expect(ShortcutInterpreter.reference.map(\.title) == ["Navigate", "Act", "Write", "Go to", "Calendar"])
         #expect(ShortcutInterpreter.reference.allSatisfy { !$0.entries.isEmpty })
     }
 }

@@ -99,6 +99,12 @@ final class KeyRouter {
         guard !store.showPalette, store.reminderTarget == nil, store.draft == nil else { return false }
         if let responder = window.firstResponder as? NSTextView, responder.isEditable { return false }
 
+        // The agenda closes on any key, like the shortcut help; t and Esc are the ones you'd reach for.
+        if store.showAgenda, event.modifierFlags.intersection([.command, .control]).isEmpty {
+            store.showAgenda = false
+            return true
+        }
+
         // Command-key shortcuts belong to the menu bar. Option is allowed: some keyboard layouts need it to type "#".
         guard event.modifierFlags.intersection([.command, .control]).isEmpty else { return false }
         guard let characters = ShortcutInterpreter.shortcutCharacters(
@@ -110,6 +116,17 @@ final class KeyRouter {
         if store.showHelp {
             store.showHelp = false
             return true
+        }
+
+        // In the calendar: arrows and j/k change the day, t comes back to today, Esc goes back to mail.
+        if store.showCalendar, !interpreter.isAwaitingSequence {
+            switch (event.keyCode, characters) {
+            case (123, _), (_, "k"), (_, "p"): store.moveCalendarDay(by: -1); return true
+            case (124, _), (_, "j"), (_, "n"): store.moveCalendarDay(by: 1); return true
+            case (_, "t"): store.showCalendarToday(); return true
+            case (ShortcutInterpreter.KeyCode.escape, _): store.closeCalendar(); return true
+            default: break
+            }
         }
 
         // In a conversation, the arrow keys, Space, Page Up/Down, Home and End scroll it. j and k still switch threads.
@@ -126,8 +143,17 @@ final class KeyRouter {
         }
         // Holding a key repeats movement only. A held "e" or Delete must not archive or trash a dozen threads.
         if event.isARepeat, !command.repeatsWhenHeld { return true }
+        // The calendar hides the list: commands that act on a conversation would act on one you can't see.
+        if store.showCalendar, !Self.worksInCalendar(command) { return true }
         perform(command, store: store)
         return true
+    }
+
+    private static func worksInCalendar(_ command: KeyCommand) -> Bool {
+        switch command {
+        case .compose, .search, .commandPalette, .help, .undo, .go, .agenda, .calendar, .close: true
+        default: false
+        }
     }
 
     private func perform(_ command: KeyCommand, store: AppStore) {
@@ -154,6 +180,8 @@ final class KeyRouter {
         case .nextSplit: store.cycleSplit(by: 1)
         case .previousSplit: store.cycleSplit(by: -1)
         case .go(let mailbox): store.setMailbox(mailbox)
+        case .agenda: store.toggleAgenda()
+        case .calendar: store.openCalendar()
         }
     }
 }

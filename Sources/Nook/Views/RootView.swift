@@ -23,7 +23,10 @@ struct RootView: View {
                             .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                     ZStack {
-                        if let thread = store.openThread {
+                        if store.showCalendar {
+                            CalendarDayView(model: store.calendar)
+                                .transition(.opacity)
+                        } else if let thread = store.openThread {
                             ReaderView(thread: thread)
                                 .id(thread.id)
                                 .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: 12)), removal: .opacity))
@@ -33,6 +36,7 @@ struct RootView: View {
                         }
                     }
                     .animation(.snappy(duration: 0.18), value: store.openThread?.id)
+                    .animation(.snappy(duration: 0.18), value: store.showCalendar)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(nsColor: .textBackgroundColor))
                 }
@@ -52,6 +56,12 @@ struct RootView: View {
             }
         }
         .overlay {
+            if store.showAgenda {
+                AgendaView(model: store.calendar)
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
             if store.showHelp {
                 ShortcutHelpView()
                     .transition(.opacity)
@@ -66,6 +76,7 @@ struct RootView: View {
         }
         .animation(.snappy(duration: 0.15), value: store.showPalette)
         .animation(.snappy(duration: 0.15), value: store.showHelp)
+        .animation(.snappy(duration: 0.15), value: store.showAgenda)
         .animation(.snappy(duration: 0.15), value: store.reminderTarget?.id)
         .sheet(item: $store.draft) { draft in
             ComposeView(draft: draft)

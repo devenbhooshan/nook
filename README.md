@@ -18,6 +18,7 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 - **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Reminders.** Press `h` to be reminded about a conversation at a time you pick or type ("fri 2pm", "3d"): a pop-up that stays until you deal with it, and the conversation at the top of your inbox. When you send, ask to be reminded if nobody replies.
+- **Your calendar, a key away.** Press `t` for today and tomorrow at a glance, with a Join button for the next call, or `g c` for a day view of your Google Calendar, across all your accounts.
 - **Attachments, done properly.** Images and PDFs show a preview under the message. Click for Quick Look, double-click to open, drag to Finder, or save everything to Downloads. Images pasted into an email show where the sender put them. Attach files with `⌘⇧A` or by dropping them on the message, and forwarding keeps the original files.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
@@ -62,7 +63,7 @@ On first launch, Nook walks you through three steps: **connect mail**, **choose 
 
 Nook uses your own OAuth client, so no third party is ever involved. This takes about five minutes, once:
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project, then go to **APIs & Services → Library** and **enable the Gmail API** and the **People API** (for senders' profile photos).
+1. In the [Google Cloud Console](https://console.cloud.google.com/), create a project, then go to **APIs & Services → Library** and **enable the Gmail API**, the **People API** (for senders' profile photos) and the **Google Calendar API** (for the calendar).
 2. Under **Google Auth Platform → Audience**, keep the user type **External**. Then either:
    - click **Publish app** (recommended). Your client stays unverified, which is fine for your own use: Google shows a warning when you sign in, and sign-ins last until you revoke them; or
    - keep the status **Testing** and, under **Test users**, add *every* address you'll connect. In Testing, **Google ends every sign-in after 7 days**, and Nook will ask you to sign in again each week.
@@ -72,7 +73,7 @@ Nook uses your own OAuth client, so no third party is ever involved. This takes 
 Your browser opens Google's sign-in. Expect two screens:
 
 - **"Google hasn't verified this app."** This is expected for your own client. Click **Continue**.
-- **"Select what Nook can access."** Make sure **Read, compose, and send emails from your Gmail account** is ticked, then click **Continue**. The contacts and directory boxes are for profile photos; leave them unticked and Nook shows initials instead.
+- **"Select what Nook can access."** Make sure **Read, compose, and send emails from your Gmail account** is ticked, then click **Continue**. The contacts and directory boxes are for profile photos; leave them unticked and Nook shows initials instead. The calendar box lets Nook show your schedule (read-only); leave it unticked and the calendar stays empty.
 
 Google then redirects to a one-time listener on `127.0.0.1`, and Nook takes over. The first sync downloads your inbox plus the last 60 days. Add more accounts in **Settings → Accounts**.
 
@@ -116,7 +117,7 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 | `⌘\` | Show or hide sidebar | `h` | Remind me | `⌘⇧A` | Attach files |
 | | | | | `⌘⇧R` | Remind me if no reply |
 
-Go-to sequences: `g i` inbox, `g h` reminders, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
+Go-to sequences: `g i` inbox, `g c` calendar, `g h` reminders, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
 
 In the ⌘K palette, the command you usually pick for the letters you type comes first: pick Move to Trash after typing `t` a couple of times, and `t` `↵` trashes. With nothing typed, the list keeps its fixed order.
 
@@ -137,6 +138,14 @@ To be reminded about something you sent, click the bell in the compose window (o
 **Reminders** (`g h`) lists everything waiting, soonest first. Press `h` on one to change its time or remove it, or `e` to remove it. Searching with `in:reminders` finds them too.
 
 Reminders live on this Mac, because Gmail has no reminders of its own. They go off while Nook is running; anything due while your Mac was off goes off as soon as Nook opens.
+
+## Calendar
+
+Press `t` anywhere for your agenda: today and tomorrow, with what's on now and what starts in the next few minutes picked out, and a **Join** button for Meet, Zoom, Teams and Webex calls. Any key closes it.
+
+`g c` (or **Calendar** in the sidebar) shows a day of your calendar in place of the mail list: all-day events on top, then the hours, with overlapping meetings side by side and a line at the current time. `←` / `→` (or `j` / `k`) move a day, `t` comes back to today, the week strip jumps to a nearby day, and `esc` goes back to your mail. Click an event to open it in Google Calendar.
+
+It shows the calendars you have switched on in Google Calendar, for every account, and a meeting on two of your accounts shows once. Nook only reads your calendar; it never changes it. Accounts connected before the calendar arrived show **Sign in again** once, to grant it.
 
 ## Attachments
 
@@ -219,6 +228,7 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 | **"Quota exceeded for quota metric … per minute per user"** | Gmail's per-user rate limit. Nook paces itself under it and retries automatically, so this clears on its own. If you saw it in an older build, update. |
 | Tagging status says **"No on-device model available"** | Ollama isn't running or the model isn't pulled (`brew services start ollama`, `ollama pull llama3.2`), or Apple Intelligence is off. **Settings → Intelligence** shows exactly which. |
 | Apple Intelligence says **"Turn on Apple Intelligence in System Settings"** | It's switched off in **System Settings → Apple Intelligence & Siri**. Apps can't turn it on for you. |
+| The calendar says **"needs the Google Calendar API turned on"** | Click **Turn On…** (or enable **Google Calendar API** under **APIs & Services → Library** in the project behind your OAuth client), wait a minute, and open the calendar again. |
 | Your MCP client says **"Nook's MCP access is turned off"** | Turn it on in **Settings → Integrations**. |
 | After a rebuild, **"Nook wants to use your confidential information stored in … your keychain"** | The build has a new identity (ad hoc signing). Enter your login keychain password and click **Always Allow**, or run `scripts/setup-signing.sh` once so it stops. If your keychain password doesn't match your Mac password (common after a password reset), click **Deny**, run the script, rebuild, and use **Settings → Accounts → Sign in again**. |
 
@@ -285,7 +295,7 @@ swift run Nook --demo --open 0 --compose --attach README.md --snapshot out.png  
 open -n --stdout out.txt build/Nook.app --args --demo --open 0 --click 293,553 --report-windows   # same, against the signed app
 ```
 
-`--click x,y` is in points from the top left of the window, or of the sheet when one is open; `x,y/x,y` clicks several points two seconds apart. `--keys` presses one key every quarter second, so a key that opens something (`h` for the reminder picker) lands before the next. `--wake-soon` makes the next reminder go off two seconds after launch, and `--alert-click x,y` clicks in its pop-up; `--snapshot` saves the pop-up next to the window as `<name>-alert.png`. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
+`--click x,y` is in points from the top left of the window, or of the sheet when one is open; `x,y/x,y` clicks several points two seconds apart. `--keys` presses one key every quarter second, so a key that opens something (`h` for the reminder picker) lands before the next. `--wake-soon` makes the next reminder go off two seconds after launch, and `--alert-click x,y` clicks in its pop-up; `--snapshot` saves the pop-up next to the window as `<name>-alert.png`. The demo has a week of calendar events; `--calendar-signin` makes its calendar ask to sign in again instead. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
 
 `build-app.sh` signs with the most stable identity it finds: `$NOOK_SIGN_IDENTITY`, then a **Developer ID Application** certificate in your keychain, then the local certificate from `setup-signing.sh`, then ad hoc. Have one of the first three in place before you connect real accounts. Ad hoc builds look like a new app to macOS on every rebuild, so Keychain asks you to approve access to Nook's saved sign-ins each time.
 

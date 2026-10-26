@@ -71,6 +71,8 @@ public enum GoogleOAuth {
         "https://www.googleapis.com/auth/contacts.readonly",
         "https://www.googleapis.com/auth/contacts.other.readonly",
         "https://www.googleapis.com/auth/directory.readonly",
+        // Your schedule, read-only, for the calendar view and the agenda.
+        "https://www.googleapis.com/auth/calendar.readonly",
     ]
     static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!

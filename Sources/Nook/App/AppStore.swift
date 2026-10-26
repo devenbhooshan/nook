@@ -83,6 +83,14 @@ final class AppStore: ObservableObject {
     @Published var showHelp = false
     /// The conversation the reminder picker is choosing a time for.
     @Published var reminderTarget: ThreadSummary?
+    /// Your schedule, for the calendar view and the agenda.
+    let calendar = CalendarModel()
+    /// The day view (g c) is showing in place of the mail list.
+    @Published private(set) var showCalendar = false
+    /// The day the calendar view shows.
+    @Published private(set) var calendarDay = Calendar.current.startOfDay(for: Date())
+    /// The quick agenda (t) is open over whatever's on screen.
+    @Published var showAgenda = false
     @Published var draft: Draft?
     /// Recipient suggestions for the To and Cc fields. Rebuilt in the background each time a message is started.
     @Published private(set) var contactBook = ContactBook()
@@ -234,6 +242,9 @@ final class AppStore: ObservableObject {
         restoreSnoozedConversations()
         // Reminders that came due while Nook wasn't running go off now.
         wakeDueReminders()
+        calendar.makeSources = { [weak self] in self?.calendarSources() ?? [:] }
+        // Fetched now, so the agenda opens with your day already in it.
+        calendar.refresh()
 
         $searchText
             .removeDuplicates()
@@ -435,6 +446,7 @@ final class AppStore: ObservableObject {
     }
 
     func setMailbox(_ mailbox: Mailbox) {
+        showCalendar = false
         self.mailbox = mailbox
         split = .everything
         keptVisible = []
@@ -535,6 +547,7 @@ final class AppStore: ObservableObject {
     }
 
     func focusSearch() {
+        showCalendar = false
         closeThread()
         focusSearchRequest += 1
     }
@@ -638,6 +651,8 @@ final class AppStore: ObservableObject {
                 await sync.forget(result.email)
                 expiredSignIns.remove(result.email)
                 photosRefreshed = nil
+                // The new sign-in may have granted the calendar: fetch it again now.
+                calendar.refresh(around: calendarDay, force: true)
                 NSApp.activate()
                 loadAccounts(checkSignIns: true)
                 syncErrors[result.email] = nil
@@ -941,6 +956,50 @@ final class AppStore: ObservableObject {
         pending.action()
         reload()
         showToast("Undone")
+    }
+
+    // MARK: Calendar
+
+    /// g c: the day view, in place of the mail list.
+    func openCalendar(day: Date = Date()) {
+        showAgenda = false
+        closeThread()
+        calendarDay = Calendar.current.startOfDay(for: day)
+        showCalendar = true
+        calendar.refresh(around: calendarDay)
+    }
+
+    func closeCalendar() {
+        showCalendar = false
+    }
+
+    func moveCalendarDay(by days: Int) {
+        guard let day = Calendar.current.date(byAdding: .day, value: days, to: calendarDay) else { return }
+        calendarDay = day
+        calendar.refresh(around: day)
+    }
+
+    func showCalendarToday() {
+        calendarDay = Calendar.current.startOfDay(for: Date())
+        calendar.refresh(around: calendarDay)
+    }
+
+    /// t: today and tomorrow at a glance, over whatever's on screen.
+    func toggleAgenda() {
+        showAgenda.toggle()
+        if showAgenda { calendar.refresh() }
+    }
+
+    /// One Google Calendar per signed-in account; the demo's own events in demo mode.
+    private func calendarSources() -> [String: CalendarSource] {
+        if isDemo { return DemoData.calendarSources(accounts: accounts.map(\.email)) }
+        let config = googleConfig
+        var sources: [String: CalendarSource] = [:]
+        for email in accounts.map(\.email) where !signedOutAccounts.contains(email) {
+            guard let tokens = secrets.tokens(for: email) else { continue }
+            sources[email] = GoogleCalendar(account: email, tokens: OAuthTokenProvider(email: email, tokens: tokens, config: config, store: secrets))
+        }
+        return sources
     }
 
     // MARK: Reminders
@@ -1345,7 +1404,8 @@ final class AppStore: ObservableObject {
         }
 
         var commands: [PaletteCommand] = []
-        if currentThread != nil {
+        // The calendar hides the list, so its selection isn't something to act on.
+        if currentThread != nil, !showCalendar {
             commands += [
                 PaletteCommand(title: "Mark done", section: "Conversation", systemImage: "checkmark", shortcut: "E") { [weak self] in self?.archive() },
                 PaletteCommand(title: "Remind me…", section: "Conversation", systemImage: "bell", shortcut: "H") { [weak self] in
@@ -1380,6 +1440,10 @@ final class AppStore: ObservableObject {
         commands += [
             PaletteCommand(title: "New message", section: "General", systemImage: "square.and.pencil", shortcut: "C") { [weak self] in self?.compose() },
             PaletteCommand(title: "Search", section: "General", systemImage: "magnifyingglass", shortcut: "/") { [weak self] in self?.focusSearch() },
+            PaletteCommand(title: "Today's agenda", section: "General", systemImage: "calendar.day.timeline.left", shortcut: "T") { [weak self] in
+                DispatchQueue.main.async { self?.toggleAgenda() }
+            },
+            PaletteCommand(title: "Calendar", section: "General", systemImage: "calendar", shortcut: "G C") { [weak self] in self?.openCalendar() },
             PaletteCommand(
                 title: unreadOnly ? "Show all mail" : "Show only unread", section: "General",
                 systemImage: unreadOnly ? "tray" : "circle.inset.filled", shortcut: "⇧U"

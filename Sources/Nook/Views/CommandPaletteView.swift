@@ -156,6 +156,9 @@ struct ShortcutHelpView: View {
                         column(ShortcutInterpreter.reference[2])
                         column(ShortcutInterpreter.reference[3])
                     }
+                    GridRow {
+                        column(ShortcutInterpreter.reference[4])
+                    }
                 }
             }
             .padding(26)

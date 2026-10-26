@@ -8,6 +8,7 @@ public enum KeyCommand: Equatable, Sendable {
     case search, commandPalette, tagPicker, help, undo
     case nextSplit, previousSplit
     case toggleUnreadFilter
+    case agenda, calendar
     case go(Mailbox)
 
     /// Whether holding the key down should repeat the command. Only movement does: a held "e" or Delete must
@@ -18,7 +19,7 @@ public enum KeyCommand: Equatable, Sendable {
 }
 
 /// Turns single key presses into commands. Superhuman-style: one key per action, and `g` starts
-/// a two-key "go to" sequence (`g i` inbox, `g h` reminders, `g s` starred, `g t` sent, `g a` all mail, `g #` trash).
+/// a two-key "go to" sequence (`g i` inbox, `g c` calendar, `g h` reminders, `g s` starred, `g t` sent, `g a` all mail, `g #` trash).
 public struct ShortcutInterpreter: Sendable {
     public enum KeyCode {
         public static let returnKey: UInt16 = 36
@@ -65,6 +66,7 @@ public struct ShortcutInterpreter: Sendable {
                 case "d": return .go(.drafts)
                 case "a", "e": return .go(.all)
                 case "#": return .go(.trash)
+                case "c": return .calendar
                 default: break
                 }
             }
@@ -98,6 +100,7 @@ public struct ShortcutInterpreter: Sendable {
         case "l": return .tagPicker
         case "?": return .help
         case "z": return .undo
+        case "t": return .agenda
         case "g":
             pendingGoSince = now
             return nil
@@ -159,6 +162,13 @@ public struct ShortcutInterpreter: Sendable {
             Entry(keys: "g d", title: "Drafts"),
             Entry(keys: "g a", title: "All mail"),
             Entry(keys: "g #", title: "Trash"),
+        ]),
+        Section(title: "Calendar", entries: [
+            Entry(keys: "t", title: "Today's agenda"),
+            Entry(keys: "g c", title: "Calendar"),
+            Entry(keys: "← / →", title: "Previous / next day (j / k too)"),
+            Entry(keys: "t", title: "Back to today, in the calendar"),
+            Entry(keys: "esc", title: "Back to mail"),
         ]),
     ]
 }

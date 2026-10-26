@@ -20,7 +20,7 @@ enum DemoData {
     private static func pressKeys(_ keys: [String], in store: AppStore) {
         guard let main = store.mainWindow else { return }
         let codes: [String: (UInt16, String)] = [
-            "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "space": (49, " "),
+            "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "left": (123, "\u{F702}"), "right": (124, "\u{F703}"), "space": (49, " "),
             "pagedown": (121, "\u{F72D}"), "pageup": (116, "\u{F72C}"), "home": (115, "\u{F729}"), "end": (119, "\u{F72B}"),
             "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
             "return": (36, "\r"), "tab": (48, "\t"),
@@ -114,6 +114,12 @@ enum DemoData {
             alert.cacheDisplay(in: alert.bounds, to: picture)
             try? picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-alert.png")))
         }
+        // So does the Settings window, when it's open.
+        if let settings = NSApp.windows.first(where: { $0.isVisible && $0 !== main && !($0 is NSPanel) })?.contentView?.superview,
+           let picture = settings.bitmapImageRepForCachingDisplay(in: settings.bounds) {
+            settings.cacheDisplay(in: settings.bounds, to: picture)
+            try? picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
+        }
         print("demo: alerts=\(ReminderAlerts.shared.visiblePanels.count)")
         print("demo: snapshot=\(path)")
         fflush(stdout)
@@ -173,6 +179,9 @@ enum DemoData {
         if arguments.contains("--settings") {
             // Same path as the "Sign in again…" button, so it can be checked without clicking.
             DispatchQueue.main.async { store.openSettings() }
+        }
+        if arguments.contains("--settings-accounts") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { store.openSettings(tab: .accounts) }
         }
         if let flag = arguments.firstIndex(of: "--split"), arguments.indices.contains(flag + 1) {
             store.setSplit(.tag(arguments[flag + 1]))
@@ -453,3 +462,60 @@ That's it for this week. Reply to this email with what you're building; we read 
 
 The Margin
 """
+
+// MARK: Calendar
+
+extension DemoData {
+    /// A plausible week around today, on the first demo account. `--calendar-signin` makes it ask to sign in again instead.
+    static func calendarSources(accounts: [String]) -> [String: CalendarSource] {
+        guard let account = accounts.first else { return [:] }
+        if CommandLine.arguments.contains("--calendar-signin") {
+            return Dictionary(uniqueKeysWithValues: accounts.map { ($0, DemoCalendar(account: $0, needsPermission: true) as CalendarSource) })
+        }
+        return [account: DemoCalendar(account: account, needsPermission: false)]
+    }
+}
+
+private struct DemoCalendar: CalendarSource {
+    let account: String
+    let needsPermission: Bool
+
+    func events(from start: Date, to end: Date) async throws -> [CalendarEvent] {
+        if needsPermission { throw PeopleError.needsPermission }
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        func at(_ day: Int, _ hour: Double) -> Date {
+            calendar.date(byAdding: .day, value: day, to: today)!.addingTimeInterval(hour * 3600)
+        }
+        let meet = URL(string: "https://meet.google.com/abc-defg-hij")
+        let zoom = URL(string: "https://acme.zoom.us/j/8812345")
+        let work = "#4f9d8f", personal = "#d06b64"
+        var id = 0
+        func event(
+            _ title: String, _ day: Int, _ from: Double, _ to: Double, join: URL? = nil, location: String? = nil,
+            color: String = work, response: CalendarEvent.Response? = .accepted, allDay: Bool = false
+        ) -> CalendarEvent {
+            id += 1
+            return CalendarEvent(
+                id: "\(account)/demo/\(id)", account: account, calendarName: color == work ? "Work" : "Personal", title: title,
+                start: allDay ? at(day, 0) : at(day, from), end: allDay ? at(day + Int(to), 0) : at(day, to), isAllDay: allDay,
+                location: location, joinURL: join, link: URL(string: "https://calendar.google.com/calendar/r"), color: color, response: response
+            )
+        }
+        return [
+            event("Priya out of office", 0, 0, 1, color: personal, allDay: true),
+            event("Standup", 0, 9.5, 9.75, join: meet),
+            event("Design review: Reader v3", 0, 11, 12, join: meet),
+            event("Lunch with Maya", 0, 11.5, 12.5, location: "Tartine, Valencia St", color: personal),
+            event("1:1 with Jordan", 0, 15, 15.5, join: zoom),
+            event("Sales sync", 0, 16, 16.5, join: meet, response: .declined),
+            event("Launch prep", 0, 17, 18, response: .needsAction),
+            event("Board prep", 1, 10, 11.5, join: meet),
+            event("Dentist", 1, 13, 14, location: "Mission Dental", color: personal),
+            event("Standup", 1, 9.5, 9.75, join: meet),
+            event("Standup", -1, 9.5, 9.75, join: meet),
+            event("Customer call: Acme", 2, 14, 15, join: zoom),
+            event("Flight to Lisbon", 3, 18, 22, location: "SFO", color: personal),
+        ].filter { $0.start < end && $0.end > start }
+    }
+}

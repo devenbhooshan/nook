@@ -111,21 +111,7 @@ private struct AccountsSettings: View {
                     Text("No accounts yet.").foregroundStyle(.secondary)
                 }
                 ForEach(store.accounts) { account in
-                    HStack(spacing: 10) {
-                        AccountDot(colorIndex: account.colorIndex, size: 8)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(account.email)
-                            Text(status(for: account)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if store.hasGoogleClient, store.needsSignIn(account.email) || store.photoAccess[account.email] == .needsPermission {
-                            Button(store.isSigningIn ? "Waiting for Google…" : "Sign in again") { store.addAccount(hint: account.email) }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(store.isSigningIn)
-                                .help("Opens Google sign-in. Choose \(account.email).")
-                        }
-                        Button("Remove…") { pendingRemoval = account }
-                    }
+                    AccountRow(account: account, calendar: store.calendar) { pendingRemoval = account }
                 }
                 HStack {
                     if store.hasGoogleClient {
@@ -158,8 +144,52 @@ private struct AccountsSettings: View {
             Text("Nook deletes this account's mail from this Mac and forgets its sign-in. Nothing changes in Gmail.")
         }
     }
+}
 
-    private func status(for account: Account) -> String {
+/// One account in Settings, with Sign in again when it's signed out or missing a permission (photos, calendar).
+private struct AccountRow: View {
+    @EnvironmentObject private var store: AppStore
+    let account: Account
+    @ObservedObject var calendar: CalendarModel
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            AccountDot(colorIndex: account.colorIndex, size: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(account.email)
+                Text(status).font(.caption).foregroundStyle(.secondary)
+                if !missing.isEmpty, !store.needsSignIn(account.email) {
+                    Label("Missing permission: \(missing.joined(separator: ", "))", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .help("Signing in again asks Google for it. Tick its box on Google's screen.")
+                }
+            }
+            Spacer()
+            if store.hasGoogleClient, needsSignIn {
+                Button(store.isSigningIn ? "Waiting for Google…" : "Sign in again") { store.addAccount(hint: account.email) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isSigningIn)
+                    .help("Opens Google sign-in. Choose \(account.email).")
+            }
+            Button("Remove…", action: remove)
+        }
+    }
+
+    private var needsSignIn: Bool {
+        store.needsSignIn(account.email) || !missing.isEmpty
+    }
+
+    /// Permissions this account's sign-in doesn't include.
+    private var missing: [String] {
+        var missing: [String] = []
+        if calendar.access[account.email] == .needsPermission { missing.append("Calendar") }
+        if store.photoAccess[account.email] == .needsPermission { missing.append("Profile photos") }
+        return missing
+    }
+
+    private var status: String {
         if store.expiredSignIns.contains(account.email) {
             return "Google ended this sign-in, so it isn't syncing. While your Google Cloud app is in Testing, Google ends sign-ins after 7 days."
         }
@@ -170,12 +200,9 @@ private struct AccountsSettings: View {
         }
         if let error = store.syncErrors[account.email] { return error }
         guard let lastSync = account.lastSync else { return "Not synced yet" }
-        let synced = "Synced \(lastSync.formatted(.relative(presentation: .named)))"
-        switch store.photoAccess[account.email] {
-        case .needsPermission: return synced + ". Sign in again to show profile photos."
-        case .apiDisabled: return synced + ". Profile photos need the People API turned on in Google Cloud."
-        default: return synced
-        }
+        var text = "Synced \(lastSync.formatted(.relative(presentation: .named)))"
+        if case .apiDisabled = store.photoAccess[account.email] { text += " Profile photos need the People API turned on in Google Cloud." }
+        return text
     }
 }
 

@@ -256,16 +256,14 @@ struct TopBar<Leading: View, Trailing: View>: View {
     }
 }
 
-/// Centers content in a readable column on wide windows.
+/// Content that spans the window, with the list's side margins.
 struct ContentColumn<Content: View>: View {
-    var maxWidth: CGFloat = 1120
     @ViewBuilder var content: Content
 
     var body: some View {
         content
-            .frame(maxWidth: maxWidth)
-            .padding(.horizontal, 20)
             .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
     }
 }
 
