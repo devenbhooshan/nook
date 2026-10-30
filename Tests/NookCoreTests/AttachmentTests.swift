@@ -150,3 +150,31 @@ struct GmailUploadTests {
         #expect(body.contains("Content-Type: message/rfc822"))
     }
 }
+
+@Suite("Attachment quarantine")
+struct AttachmentQuarantineTests {
+    private func file(_ name: String) throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(name)
+        try Data("#!/bin/sh\n".utf8).write(to: url)
+        return url
+    }
+
+    @Test("a file from an email is flagged, so Gatekeeper checks it before it runs")
+    func flagsTheFile() throws {
+        let url = try file("invoice.terminal")
+        #expect(try url.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties == nil)
+
+        try AttachmentQuarantine.mark(url)
+
+        let properties = try #require(try url.resourceValues(forKeys: [.quarantinePropertiesKey]).quarantineProperties)
+        #expect(properties["LSQuarantineAgentName"] as? String == "Nook")
+    }
+
+    @Test("a file that isn't there is an error, not a silent skip")
+    func missingFile() {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        #expect(throws: (any Error).self) { try AttachmentQuarantine.mark(url) }
+    }
+}

@@ -61,6 +61,7 @@ final class AttachmentFiles {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: Self.temporaryRoot.path)
         try data.write(to: url, options: [.atomic])
+        try AttachmentQuarantine.mark(url)
         return url
     }
 
@@ -72,6 +73,7 @@ final class AttachmentFiles {
             let data = try await data(ref)
             let url = Self.unusedURL(in: downloads, for: Self.safeFilename(ref.attachment.filename))
             try data.write(to: url, options: [.withoutOverwriting])
+            try AttachmentQuarantine.mark(url)
             saved.append(url)
             // Bounces the Downloads stack in the Dock, the way a finished browser download does.
             DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.path)
@@ -87,6 +89,7 @@ final class AttachmentFiles {
         panel.allowsOtherFileTypes = true
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         try await data(ref).write(to: url, options: [.atomic])
+        try AttachmentQuarantine.mark(url)
         return url
     }
 
