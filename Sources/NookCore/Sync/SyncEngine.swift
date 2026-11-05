@@ -15,6 +15,20 @@ public struct SyncReport: Sendable, Equatable {
     }
 }
 
+/// How much attachment data Nook keeps on this Mac, chosen in Settings → Privacy.
+public enum AttachmentStorage {
+    public static let limitKey = "attachments.storageLimitGB"
+    public static let defaultGigabytes = 50
+    public static let choices = [5, 10, 20, 50, 100]
+
+    public static func bytes(gigabytes: Int) -> Int { gigabytes * 1024 * 1024 * 1024 }
+
+    public static func limit(in defaults: UserDefaults) -> Int {
+        let chosen = defaults.integer(forKey: limitKey)
+        return bytes(gigabytes: chosen > 0 ? chosen : defaultGigabytes)
+    }
+}
+
 /// Keeps the local store in step with Gmail.
 ///
 /// - The first sync downloads the inbox plus recent mail (`initialQuery`), then saves Gmail's history cursor.
@@ -39,6 +53,12 @@ public actor SyncEngine {
     /// Accounts whose drafts were checked since launch. Accounts synced before Nook kept drafts get theirs here.
     private var draftsChecked: Set<String> = []
     private var running: [String: Task<SyncReport, Error>] = [:]
+    private var downloads: [String: Task<Void, Never>] = [:]
+    private var backfills: [String: Task<Int, Error>] = [:]
+    /// How much attachment data to keep on this Mac. Past this, the oldest mail's files go back to being fetched on demand.
+    private let attachmentBudget: @Sendable () -> Int
+    /// Bigger files stay in Gmail.
+    static let largestStoredAttachment = 25 * 1024 * 1024
 
     private let now: @Sendable () -> Date
     /// Conversations the user just changed, and until when a sync should leave their labels alone.
@@ -46,11 +66,13 @@ public actor SyncEngine {
 
     public init(
         repo: MailRepository, makeService: @escaping ServiceFactory, onChange: @escaping @Sendable () -> Void = {},
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        attachmentBudget: @escaping @Sendable () -> Int = { AttachmentStorage.bytes(gigabytes: AttachmentStorage.defaultGigabytes) }
     ) {
         self.repo = repo
         self.makeService = makeService
         self.onChange = onChange
+        self.attachmentBudget = attachmentBudget
         self.now = now
     }
 
@@ -96,6 +118,41 @@ public actor SyncEngine {
         running[email] = nil
         task?.cancel()
         _ = try? await task?.value
+        let download = downloads[email]
+        download?.cancel()
+        await download?.value
+        let backfill = backfills[email]
+        backfills[email] = nil
+        backfill?.cancel()
+        _ = try? await backfill?.value
+    }
+
+    // MARK: Older mail
+
+    /// Downloads every message matching `query` that isn't stored yet, newest first. Returns how many it added.
+    /// A second call for the same account while one runs joins it. Stopping part way loses nothing:
+    /// the next run skips what's already stored.
+    @discardableResult
+    public func loadOlderMail(
+        account: String, query: String, progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void = { _, _ in }
+    ) async throws -> Int {
+        if let task = backfills[account] { return try await task.value }
+        let task = Task { () throws -> Int in
+            let service = try self.service(for: account)
+            let known = repo.messageIds(account: account)
+            let ids = try await service.listMessageIDs(query: query, limit: MailHistory.largestListing).filter { !known.contains($0) }
+            progress(0, ids.count)
+            var added = 0
+            // Bigger slices than a sync's batches, so progress is reported without a call per batch.
+            for start in stride(from: 0, to: ids.count, by: 200) {
+                added += try await fetchAndStore(Array(ids[start..<min(start + 200, ids.count)]), account: account, service: service)
+                progress(min(start + 200, ids.count), ids.count)
+            }
+            return added
+        }
+        backfills[account] = task
+        defer { backfills[account] = nil }
+        return try await task.value
     }
 
     /// Re-reads one conversation's labels from Gmail, so local state matches the server after a change Gmail
@@ -140,6 +197,7 @@ public actor SyncEngine {
                 }
                 // A few older messages at a time, so mail stored before Nook kept attachments shows its files.
                 try? await fillInAttachments(account: email, ids: repo.messagesMissingAttachments(account: email, limit: 40), service: service)
+                startDownloadingAttachments(account: email, service: service)
                 return report
             } catch GmailError.notFound {
                 // History older than about a week expires. Start over, and re-check labels we can no longer replay.
@@ -278,6 +336,49 @@ public actor SyncEngine {
         if !messages.isEmpty { onChange() }
     }
 
+    /// Keeps files on this Mac so they open instantly. This runs beside sync, because it can take a long time.
+    private func startDownloadingAttachments(account: String, service: GmailService) {
+        guard downloads[account] == nil else { return }
+        downloads[account] = Task {
+            await downloadAttachments(account: account, service: service)
+            downloads[account] = nil
+        }
+    }
+
+    /// Newest mail first. Stops at the first failure and carries on after the next sync.
+    private func downloadAttachments(account: String, service: GmailService) async {
+        // The limit may have been lowered since the last run.
+        try? repo.trimStoredAttachments(toBudget: attachmentBudget())
+        while !Task.isCancelled {
+            let ids = repo.messagesAwaitingAttachments(account: account, budget: attachmentBudget(), limit: 20)
+            if ids.isEmpty { return }
+            for id in ids {
+                guard let message = repo.message(account: account, id: id) else { return }
+                var files: [(partId: String, data: Data?)] = []
+                for attachment in message.attachments {
+                    var data: Data?
+                    if !attachment.isInline, attachment.size <= Self.largestStoredAttachment {
+                        do {
+                            data = try await service.data(for: attachment, messageId: id)
+                        } catch GmailError.notFound {
+                            data = nil
+                        } catch {
+                            return
+                        }
+                    }
+                    if Task.isCancelled { return }
+                    files.append((attachment.partId, data))
+                }
+                do {
+                    try repo.storeAttachments(account: account, messageId: id, files: files)
+                    try repo.trimStoredAttachments(toBudget: attachmentBudget())
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+
     // MARK: Fetching
 
     /// Spam is never stored.
@@ -358,4 +459,40 @@ public actor SyncEngine {
             return (results, missing)
         }
     }
+}
+
+/// How far back Nook keeps mail. The first sync brings the inbox and the last 60 days; more is loaded on request.
+public enum MailHistory {
+    public static let yearsKey = "sync.historyYears"
+    /// Years of mail. 0 is the first sync's 60 days; `everything` is the whole mailbox.
+    public static let everything = -1
+    public static let choices = [0, 1, 2, 3, 4, everything]
+    /// Gmail's search for a choice, or nil when the first sync already covers it. Spam and trash are never stored.
+    public static func query(years: Int) -> String? {
+        switch years {
+        case 0: nil
+        case everything: "-in:spam -in:trash"
+        default: "newer_than:\(years)y -in:spam -in:trash"
+        }
+    }
+
+    public static func label(years: Int) -> String {
+        switch years {
+        case 0: "60 days"
+        case everything: "All mail"
+        case 1: "1 year"
+        default: "\(years) years"
+        }
+    }
+
+    /// Whether mail loaded for `loaded` already covers `wanted`.
+    public static func covers(_ loaded: Int, _ wanted: Int) -> Bool {
+        if loaded == everything { return true }
+        if wanted == everything { return false }
+        return loaded >= wanted
+    }
+
+    static let largestListing = 2_000_000
+    /// Per account, the choice whose mail has finished loading.
+    public static func loadedKey(_ account: String) -> String { "sync.historyLoaded.\(account)" }
 }

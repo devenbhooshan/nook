@@ -9,6 +9,8 @@ public enum NookURL: Equatable, Sendable {
     case reply(account: String, threadId: String, body: String, all: Bool)
     /// `nook://open?account=&thread=`
     case open(account: String, threadId: String)
+    /// `nook://draft?account=&message=`: a saved Gmail draft, by the message it holds now.
+    case draft(account: String, messageId: String)
 
     public static let scheme = "nook"
 
@@ -31,6 +33,9 @@ public enum NookURL: Equatable, Sendable {
         case "open":
             guard let account = query["account"], let thread = query["thread"], !account.isEmpty, !thread.isEmpty else { return nil }
             self = .open(account: account, threadId: thread)
+        case "draft":
+            guard let account = query["account"], let message = query["message"], !account.isEmpty, !message.isEmpty else { return nil }
+            self = .draft(account: account, messageId: message)
         default:
             return nil
         }
@@ -55,6 +60,9 @@ public enum NookURL: Equatable, Sendable {
         case let .open(account, threadId):
             components.host = "open"
             items = [URLQueryItem(name: "account", value: account), URLQueryItem(name: "thread", value: threadId)]
+        case let .draft(account, messageId):
+            components.host = "draft"
+            items = [URLQueryItem(name: "account", value: account), URLQueryItem(name: "message", value: messageId)]
         }
         components.queryItems = items
         // URLComponents leaves "+" alone, which some parsers read as a space.

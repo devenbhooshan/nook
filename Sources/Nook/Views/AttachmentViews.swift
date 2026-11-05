@@ -197,25 +197,38 @@ struct AttachmentCard: View {
     }
 }
 
-/// A file going out with a draft, with a button to take it off.
+/// A file going out with a draft: click to preview it, with a button to take it off.
 struct OutgoingAttachmentChip: View {
+    @EnvironmentObject private var store: AppStore
     let attachment: OutgoingAttachment
+    let open: () -> Void
     let remove: () -> Void
     @State private var hovering = false
+    @State private var preview: NSImage?
+
+    private static let thumbnailSize: CGFloat = 40
 
     var body: some View {
-        HStack(spacing: 7) {
-            Image(nsImage: attachment.icon)
-                .resizable()
-                .frame(width: 18, height: 18)
-            Text(attachment.filename)
-                .font(.system(size: 12, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 180, alignment: .leading)
-            Text(attachment.formattedSize)
-                .font(.system(size: 11).monospacedDigit())
-                .foregroundStyle(.tertiary)
+        HStack(spacing: 4) {
+            Button(action: open) {
+                HStack(spacing: 8) {
+                    thumbnail
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(attachment.filename)
+                            .font(.system(size: 12, weight: .medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(attachment.formattedSize)
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: 170, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .clickable()
+            .help("Preview")
             Button(action: remove) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .bold))
@@ -226,11 +239,86 @@ struct OutgoingAttachmentChip: View {
             .buttonStyle(.quiet)
             .help("Remove")
         }
-        .padding(.leading, 8)
+        .padding(.leading, 6)
         .padding(.trailing, 4)
-        .frame(height: 28)
-        .background(Color.primary.opacity(hovering ? 0.08 : 0.05), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .frame(height: 52)
+        .background(Color.primary.opacity(hovering ? 0.08 : 0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .onHover { hovering = $0 }
+        .task(id: attachment.id) { await loadPreview() }
+    }
+
+    @ViewBuilder private var thumbnail: some View {
+        if let preview {
+            Image(nsImage: preview)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: Self.thumbnailSize, height: Self.thumbnailSize)
+                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        } else {
+            Image(nsImage: attachment.icon)
+                .resizable()
+                .frame(width: 28, height: 28)
+                .frame(width: Self.thumbnailSize, height: Self.thumbnailSize)
+        }
+    }
+
+    /// Images and PDFs get a picture of what's inside. A big file still in Gmail keeps its icon rather than download on sight.
+    private func loadPreview() async {
+        let isPDF = attachment.mimeType.lowercased() == "application/pdf" || attachment.filename.lowercased().hasSuffix(".pdf")
+        guard attachment.mimeType.lowercased().hasPrefix("image/") || isPDF else { return }
+        guard attachment.data != nil || attachment.size <= 10 * 1024 * 1024 else { return }
+        guard let data = try? await store.attachmentFiles.data(attachment) else { return }
+        let pixels = Self.thumbnailSize * 2
+        let image = await Task.detached(priority: .utility) {
+            isPDF ? AttachmentCard.pdfThumbnail(data, size: CGSize(width: pixels, height: pixels)) : AttachmentCard.imageThumbnail(data, maxPixels: Int(pixels))
+        }.value
+        guard let image, !Task.isCancelled else { return }
+        preview = image
+    }
+}
+
+/// Takes files dragged onto the view it covers. A text view accepts dragged files itself, typing their path, so a
+/// drop handler behind one never hears about them. This sits on top instead, and lets every mouse event through.
+struct FileDropOverlay: NSViewRepresentable {
+    @Binding var isTargeted: Bool
+    let drop: ([URL]) -> Void
+
+    func makeNSView(context: Context) -> Target {
+        let view = Target()
+        view.registerForDraggedTypes([.fileURL])
+        return view
+    }
+
+    func updateNSView(_ view: Target, context: Context) {
+        view.setTargeted = { isTargeted = $0 }
+        view.drop = drop
+    }
+
+    final class Target: NSView {
+        var setTargeted: (Bool) -> Void = { _ in }
+        var drop: ([URL]) -> Void = { _ in }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        private func files(_ info: NSDraggingInfo) -> [URL] {
+            let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+            return info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
+        }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            let accepted = !files(sender).isEmpty
+            setTargeted(accepted)
+            return accepted ? .copy : []
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) { setTargeted(false) }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            setTargeted(false)
+            let urls = files(sender)
+            if !urls.isEmpty { drop(urls) }
+            return !urls.isEmpty
+        }
     }
 }
 

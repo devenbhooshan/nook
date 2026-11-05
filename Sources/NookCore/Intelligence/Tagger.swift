@@ -161,11 +161,13 @@ public actor Tagger {
     public init(
         repo: MailRepository,
         batchSize: Int = 10,
+        recentDays: Int? = Tagger.recentDays,
         modelProvider: @escaping ModelProvider,
         onUpdate: @escaping @Sendable (TaggerStatus) -> Void = { _ in }
     ) {
         self.repo = repo
         self.batchSize = batchSize
+        self.recentDays = recentDays
         self.modelProvider = modelProvider
         self.onUpdate = onUpdate
     }
@@ -184,19 +186,25 @@ public actor Tagger {
         } while needsAnotherPass
     }
 
+    /// Only recent mail is tagged automatically. Older mail loaded from history stays untagged
+    /// (tag it by hand), which keeps the model from working through years of mail.
+    public static let recentDays = 60
+    private let recentDays: Int?
+    private var cutoff: Date? { recentDays.map { Date().addingTimeInterval(-Double($0) * 86_400) } }
+
     private func drain() async {
         let tags = repo.tags()
         guard !tags.isEmpty else { return }
         guard let model = await modelProvider() else {
-            onUpdate(TaggerStatus(pending: repo.untaggedCount(), lastError: "No on-device model available"))
+            onUpdate(TaggerStatus(pending: repo.untaggedCount(since: cutoff), lastError: "No on-device model available"))
             return
         }
 
-        var status = TaggerStatus(isRunning: true, modelName: model.displayName, pending: repo.untaggedCount())
+        var status = TaggerStatus(isRunning: true, modelName: model.displayName, pending: repo.untaggedCount(since: cutoff))
         onUpdate(status)
 
         while !Task.isCancelled {
-            let batch = repo.untaggedMessages(limit: batchSize)
+            let batch = repo.untaggedMessages(limit: batchSize, since: cutoff)
             if batch.isEmpty { break }
 
             for message in batch {
@@ -210,17 +218,17 @@ public actor Tagger {
                     // The model is unreachable or broken. Stop, and try again after the next sync.
                     status.isRunning = false
                     status.lastError = error.localizedDescription
-                    status.pending = repo.untaggedCount()
+                    status.pending = repo.untaggedCount(since: cutoff)
                     onUpdate(status)
                     return
                 }
             }
-            status.pending = repo.untaggedCount()
+            status.pending = repo.untaggedCount(since: cutoff)
             onUpdate(status)
         }
 
         status.isRunning = false
-        status.pending = repo.untaggedCount()
+        status.pending = repo.untaggedCount(since: cutoff)
         onUpdate(status)
     }
 }

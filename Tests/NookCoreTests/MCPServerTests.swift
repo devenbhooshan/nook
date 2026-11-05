@@ -66,7 +66,7 @@ struct MCPServerTests {
     @Test func listsToolsWithSchemas() throws {
         let result = try #require(try call("tools/list")["result"] as? [String: Any])
         let tools = try #require(result["tools"] as? [[String: Any]])
-        #expect(tools.map { $0["name"] as? String } == ["list_accounts", "list_tags", "search_threads", "get_thread", "draft_reply", "compose_draft"])
+        #expect(tools.map { $0["name"] as? String } == ["list_accounts", "list_tags", "search_threads", "get_thread", "get_attachment", "draft_reply", "compose_draft", "list_drafts", "get_draft", "update_draft", "delete_draft"])
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
     }
 
@@ -107,19 +107,11 @@ struct MCPServerTests {
         #expect(try tool("get_thread", [:]).isError)
     }
 
-    @Test func draftsOpenInNookAndAreNeverSent() throws {
-        let reply = try tool("draft_reply", ["account": "me@example.com", "thread_id": "T", "body": "Paid, thanks.", "reply_all": true])
-        #expect(!reply.isError)
-        #expect(reply.text.contains("not been sent"))
-        #expect(opened.urls.compactMap(NookURL.init) == [.reply(account: "me@example.com", threadId: "T", body: "Paid, thanks.", all: true)])
-
-        _ = try tool("compose_draft", ["to": "a@b.com", "subject": "Hi", "body": "Hello"])
-        #expect(opened.urls.compactMap(NookURL.init).last == .compose(from: nil, to: "a@b.com", cc: "", subject: "Hi", body: "Hello"))
-
+    @Test func draftingChecksItsArgumentsFirst() throws {
         #expect(try tool("compose_draft", ["to": "a@b.com", "from": "stranger@x.com"]).isError)
         #expect(try tool("compose_draft", [:]).isError)
         #expect(try tool("draft_reply", ["account": "me@example.com", "thread_id": "missing", "body": "x"]).isError)
-        #expect(opened.urls.count == 2)
+        #expect(opened.urls.isEmpty)
     }
 
     @Test func refusesToolCallsWhenTurnedOff() throws {

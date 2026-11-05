@@ -62,6 +62,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var hasStoredMail = false
     /// Accounts that have to be signed in again: their sign-in is missing (a Keychain reset, say) or Google ended it.
     @Published private(set) var signedOutAccounts: [String] = []
+    /// Older mail being loaded, per account, from 0 to 1. Shown in Settings → Accounts.
+    @Published var historyProgress: [String: Double] = [:]
+    private var historyLoads: Set<String> = []
+    private var historyFailedAt: [String: Date] = [:]
     /// Accounts whose sign-in Google revoked or expired, found by a failed sync.
     @Published private(set) var expiredSignIns: Set<String> = []
     /// Whether each account lets Nook fetch profile photos.
@@ -138,8 +142,11 @@ final class AppStore: ObservableObject {
     let isDemo: Bool
     private var sendingDrafts: Set<UUID> = []
     /// Fetches, previews and saves attachments.
-    lazy var attachmentFiles = AttachmentFiles { [sync] ref in
-        try await sync.service(for: ref.account).data(for: ref.attachment, messageId: ref.messageId)
+    lazy var attachmentFiles = AttachmentFiles { [sync, repo] ref in
+        if let stored = repo.storedAttachment(account: ref.account, messageId: ref.messageId, partId: ref.attachment.partId) {
+            return stored
+        }
+        return try await sync.service(for: ref.account).data(for: ref.attachment, messageId: ref.messageId)
     }
     /// The file Quick Look is showing, and the files it can page through.
     @Published var quickLookURL: URL?
@@ -188,7 +195,7 @@ final class AppStore: ObservableObject {
             guard let tokens = secrets.tokens(for: email) else { throw GmailError.notSignedIn(email) }
             let provider = OAuthTokenProvider(email: email, tokens: tokens, config: GoogleClientConfig.load(from: secrets), store: secrets)
             return GmailClient(tokens: provider)
-        }, onChange: notify)
+        }, onChange: notify, attachmentBudget: { AttachmentStorage.limit(in: defaults) })
 
         self.tagger = Tagger(
             repo: repo,
@@ -369,7 +376,9 @@ final class AppStore: ObservableObject {
     private func scheduleReload() {
         guard !reloadPending else { return }
         reloadPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        // While older mail pours in, every batch would redraw the list. Refresh every 2 s instead.
+        let delay = historyLoads.isEmpty ? 0.15 : 2.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.reloadPending = false
             self?.reload()
         }
@@ -394,10 +403,30 @@ final class AppStore: ObservableObject {
         reload()
     }
 
+    private var searchGeneration = 0
+
     func reload(resetSelection: Bool = false) {
+        let query = currentQuery
+        searchGeneration += 1
+        guard query.search != nil, !isDemo else {
+            apply(repo.threads(query), resetSelection: resetSelection)
+            return
+        }
+        // Searching years of mail can take a moment. Do it off the main thread so typing stays smooth,
+        // and drop results a newer keystroke has already replaced.
+        let generation = searchGeneration, repo = repo
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let updated = repo.threads(query)
+            await MainActor.run {
+                guard let self, self.searchGeneration == generation else { return }
+                self.apply(updated, resetSelection: resetSelection)
+            }
+        }
+    }
+
+    private func apply(_ updated: [ThreadSummary], resetSelection: Bool) {
         let previous = threads
         let previousIndex = selectedID.flatMap { id in previous.firstIndex { $0.id == id } }
-        let updated = repo.threads(currentQuery)
         if updated != threads { threads = updated }
 
         if resetSelection || selectedID == nil {
@@ -407,17 +436,38 @@ final class AppStore: ObservableObject {
             selectedID = threads.isEmpty ? nil : threads[min(previousIndex ?? 0, threads.count - 1)].id
         }
 
-        unreadCounts = repo.unreadInboxCounts()
-        updateDockBadge()
         hasStoredMail = !threads.isEmpty || repo.hasMessages()
-        splitCounts = repo.splitCounts(account: scope)
-        unreadSplitCounts = repo.splitCounts(account: scope, unreadOnly: true)
+        refreshCounts()
         if let open = openThread {
             let messages = repo.threadMessages(account: open.account, threadId: open.threadId)
             if messages.isEmpty {
                 closeThread()
             } else if messages != openMessages {
                 openMessages = messages
+            }
+        }
+    }
+
+    private var countsTask: Task<Void, Never>?
+
+    /// Counts scan every conversation, which takes a while with years of mail. Work them out off the main
+    /// thread so the list never waits for them; a newer refresh replaces one still running.
+    private func refreshCounts() {
+        countsTask?.cancel()
+        let repo = repo, scope = scope
+        countsTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let unread = repo.unreadInboxCounts()
+            guard !Task.isCancelled else { return }
+            let split = repo.splitCounts(account: scope)
+            guard !Task.isCancelled else { return }
+            let unreadSplit = repo.splitCounts(account: scope, unreadOnly: true)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.scope == scope else { return }
+                if self.unreadCounts != unread { self.unreadCounts = unread }
+                if self.splitCounts != split { self.splitCounts = split }
+                if self.unreadSplitCounts != unreadSplit { self.unreadSplitCounts = unreadSplit }
+                self.updateDockBadge()
             }
         }
     }
@@ -593,7 +643,41 @@ final class AppStore: ObservableObject {
             // New mail may answer a follow-up.
             wakeDueReminders()
             refreshPhotosIfDue()
+            loadMailHistoryIfNeeded()
             Task.detached { await tagger.run() }
+        }
+    }
+
+    /// Loads mail older than the first sync's 60 days, as far back as Settings → Accounts asks, in the background.
+    /// Runs after each sync until an account has it all; mail already here is skipped, so stopping part way is fine.
+    func loadMailHistoryIfNeeded() {
+        let wanted = defaults.integer(forKey: MailHistory.yearsKey)
+        guard let query = MailHistory.query(years: wanted) else { return }
+        for account in accounts where account.lastSync != nil && !historyLoads.contains(account.email) {
+            let email = account.email
+            let loadedKey = MailHistory.loadedKey(email)
+            if MailHistory.covers(defaults.object(forKey: loadedKey) as? Int ?? 0, wanted) { continue }
+            // After a failure, wait a while instead of listing the whole mailbox again on every sync.
+            if let failed = historyFailedAt[email], Date().timeIntervalSince(failed) < 300 { continue }
+            historyLoads.insert(email)
+            historyProgress[email] = 0
+            let sync = sync
+            Task {
+                do {
+                    try await sync.loadOlderMail(account: email, query: query) { done, total in
+                        Task { @MainActor [weak self] in self?.historyProgress[email] = total == 0 ? 1 : Double(done) / Double(total) }
+                    }
+                    defaults.set(wanted, forKey: loadedKey)
+                    historyFailedAt[email] = nil
+                } catch {
+                    historyFailedAt[email] = Date()
+                }
+                historyLoads.remove(email)
+                historyProgress[email] = nil
+                reload()
+                // The choice may have grown while this ran.
+                if accounts.contains(where: { $0.email == email }) { loadMailHistoryIfNeeded() }
+            }
         }
     }
 
@@ -1182,9 +1266,8 @@ final class AppStore: ObservableObject {
         ))
     }
 
-    /// Writes your edits back to the Gmail draft this was opened from.
+    /// Saves to Gmail: over the draft this was opened from, or as a new draft.
     func saveDraft(_ draft: Draft) {
-        guard let messageId = draft.gmailDraftMessageId else { return }
         self.draft = nil
         let name = account(for: draft.from)?.name ?? ""
         let sync = sync
@@ -1192,10 +1275,14 @@ final class AppStore: ObservableObject {
             do {
                 let service = try await sync.service(for: draft.from)
                 let raw = try await rawMessage(draft, fromName: name)
-                guard let id = try await service.draftID(messageId: messageId) else {
-                    return showToast("That draft was sent or deleted elsewhere.", isError: true)
+                if let messageId = draft.gmailDraftMessageId {
+                    guard let id = try await service.draftID(messageId: messageId) else {
+                        return showToast("That draft was sent or deleted elsewhere.", isError: true)
+                    }
+                    try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
+                } else {
+                    try await service.createDraft(raw: raw, threadId: draft.threadId)
                 }
-                try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
                 showToast("Draft saved")
                 syncNow()
             } catch {
@@ -1303,6 +1390,32 @@ final class AppStore: ObservableObject {
                 return showToast("That conversation isn't on this Mac.", isError: true)
             }
             open(thread)
+        case let .draft(account, messageId):
+            openSavedDraft(account: account, messageId: messageId)
+        }
+    }
+
+    /// Opens a Gmail draft another tool just saved. It reaches this Mac with the next sync, so this asks for one and waits.
+    private func openSavedDraft(account: String, messageId: String, attempt: Int = 0) {
+        if let open = draft {
+            // Never replace what someone is writing. Their window may hold an older copy of this same draft.
+            let same = open.gmailDraftMessageId != nil && open.from == account
+            return showToast(same
+                ? "Claude changed a draft. Close the message you're writing to see the new version."
+                : "Claude saved a draft. It's in Drafts when you finish this message.")
+        }
+        if let message = repo.message(account: account, id: messageId) {
+            return openGmailDraft(ThreadSummary(
+                account: account, threadId: message.threadId, latestMessageId: message.id, fromName: "", fromEmail: "",
+                subject: message.subject, snippet: "", date: message.date, messageCount: 1, isUnread: false, isStarred: false, tags: []
+            ))
+        }
+        guard attempt < 20 else { return showToast("The draft is saved in Gmail. It'll show in Drafts after the next sync.") }
+        if attempt == 0 { syncNow() }
+        Task {
+            try? await Task.sleep(for: .seconds(attempt < 5 ? 0.5 : 1.5))
+            if attempt == 6 { syncNow() }
+            openSavedDraft(account: account, messageId: messageId, attempt: attempt + 1)
         }
     }
 

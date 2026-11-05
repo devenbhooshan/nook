@@ -1,5 +1,6 @@
 import AppKit
 import NookCore
+import Quartz
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,11 @@ struct ComposeView: View {
     @State private var confirmDiscard = false
     @State private var dropTargeted = false
     @State private var choosingFiles = false
+    @State private var previewURL: URL?
+    @State private var previewItems: [URL] = []
+    @State private var pasteMonitor: Any?
+    /// Where ⌘V reads from. The demo swaps in its own, so tests leave the real clipboard alone.
+    static var pasteboard = NSPasteboard.general
     /// What the draft looked like when it opened, to tell whether discarding would lose anything.
     private let original: Draft
     @FocusState private var focus: Field?
@@ -111,14 +117,14 @@ struct ComposeView: View {
                 ScrollView {
                     FlowLayout(spacing: 6) {
                         ForEach(draft.attachments) { attachment in
-                            OutgoingAttachmentChip(attachment: attachment) {
+                            OutgoingAttachmentChip(attachment: attachment, open: { preview(attachment) }) {
                                 draft.attachments.removeAll { $0.id == attachment.id }
                             }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 72)
+                .frame(maxHeight: 116)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 20)
                 .padding(.bottom, 10)
@@ -157,13 +163,18 @@ struct ComposeView: View {
                         if hasEdits { confirmDiscard = true } else { dismiss() }
                     }
                     .keyboardShortcut(.cancelAction)
-                    .confirmationDialog("Discard this message?", isPresented: $confirmDiscard) {
+                    .confirmationDialog("Save this message as a draft?", isPresented: $confirmDiscard) {
+                        Button("Save Draft") { store.saveDraft(draft) }
                         Button("Discard", role: .destructive) { dismiss() }
                         Button("Keep Writing", role: .cancel) {}
                     } message: {
-                        Text("What you've written will be lost.")
+                        Text("Discarding loses what you've written.")
                     }
                 }
+                Button("Save Draft") { store.saveDraft(draft) }
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(!canSaveDraft)
+                    .help("Save to Drafts in Gmail (⌘S)")
                 Button {
                     store.send(draft)
                 } label: {
@@ -196,6 +207,7 @@ struct ComposeView: View {
                     .allowsHitTesting(false)
             }
         }
+        .quickLookPreview($previewURL, in: previewItems)
         // Presented from the sheet itself; a modal open panel from inside a sheet can fail to appear.
         .fileImporter(isPresented: $choosingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
@@ -207,25 +219,50 @@ struct ComposeView: View {
         .onReceive(NotificationCenter.default.publisher(for: .nookDemoAttach)) { note in
             if let urls = note.object as? [URL] { attach(urls) }
         }
-        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
-            for provider in providers {
-                _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                    guard let url else { return }
-                    Task { @MainActor in attach([url]) }
-                }
-            }
-            return true
+        .overlay {
+            FileDropOverlay(isTargeted: $dropTargeted) { attach($0) }
         }
         .onAppear {
             if draft.from.isEmpty { draft.from = store.accounts.first?.email ?? "" }
             // Start in To until it holds addresses to send to.
             focus = hasRecipients ? .body : .to
+            pasteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                pasteFiles(event) ? nil : event
+            }
         }
         .onChange(of: draft.to) { suggest() }
         .onChange(of: draft.cc) { suggest() }
         .onChange(of: focus) { suggest() }
         .onChange(of: store.contactBook) { suggest() }
-        .onDisappear { suggestions.clear() }
+        .onDisappear {
+            suggestions.clear()
+            if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
+        }
+    }
+
+    /// Shows a file in Quick Look. The arrow keys page through the draft's other files.
+    private func preview(_ attachment: OutgoingAttachment) {
+        Task {
+            do {
+                let url = try await store.attachmentFiles.temporaryFile(attachment)
+                previewItems = [url]
+                previewURL = url
+                if store.isDemo {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        let shown = QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible
+                        print("demo: compose-preview=\(url.lastPathComponent) visible=\(shown)")
+                        fflush(stdout)
+                    }
+                }
+                var items: [URL] = []
+                for other in draft.attachments {
+                    if let file = try? await store.attachmentFiles.temporaryFile(other) { items.append(file) }
+                }
+                if previewURL == url, items.contains(url) { previewItems = items }
+            } catch {
+                store.showToast("Couldn't open \(attachment.filename): \(error.localizedDescription)", isError: true)
+            }
+        }
     }
 
     /// Remind me if nobody replies. ⌘⇧R steps through the choices.
@@ -289,6 +326,13 @@ struct ComposeView: View {
             || draft.attachments.map(\.id) != original.attachments.map(\.id)
     }
 
+    /// A draft from Gmail needs changes to save. A new message needs something in it: a reply prefilled by an
+    /// assistant counts even though nothing's been typed.
+    private var canSaveDraft: Bool {
+        guard !draft.from.isEmpty, !isOverLimit else { return false }
+        return hasEdits || (draft.gmailDraftMessageId == nil && !(draft.to + draft.body).isEmpty)
+    }
+
     private var canSend: Bool {
         !draft.from.isEmpty && hasRecipients && !isOverLimit
     }
@@ -347,6 +391,23 @@ struct ComposeView: View {
                 store.showToast("Couldn't attach \(url.lastPathComponent): \(error.localizedDescription)", isError: true)
             }
         }
+    }
+
+    /// ⌘V anywhere in the composer. A text field would take a copied file's name, or nothing for a screenshot.
+    private func pasteFiles(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "v",
+              let sheet = store.mainWindow?.attachedSheet, event.window === sheet,
+              let pasted = PastedFiles.read(Self.pasteboard) else { return false }
+        switch pasted {
+        case .files(let urls):
+            attach(urls)
+        case .image(let data):
+            let taken = draft.attachments.filter { $0.filename.hasPrefix("Pasted image") }.count
+            let name = taken == 0 ? "Pasted image.png" : "Pasted image \(taken + 1).png"
+            draft.attachments.append(OutgoingAttachment(filename: name, mimeType: "image/png", data: data))
+        }
+        return true
     }
 
     private var hasRecipients: Bool {

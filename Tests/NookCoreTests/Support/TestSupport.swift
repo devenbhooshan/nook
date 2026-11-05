@@ -126,7 +126,79 @@ actor FakeGmail: GmailService {
     }
 
     func draftID(messageId: String) async throws -> String? { "draft-\(messageId)" }
-    func updateDraft(id: String, raw: String, threadId: String?) async throws {}
+    var savedDrafts: [String: (raw: String, threadId: String?, messageId: String)] = [:]
+    var draftOrder: [String] = []
+    private var draftCounter = 0
+    func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef {
+        guard savedDrafts[id] != nil else { throw GmailError.notFound }
+        draftCounter += 1
+        if let old = savedDrafts[id] { messages[old.messageId] = nil }
+        savedDrafts[id] = (raw, threadId, "dm\(draftCounter)")
+        storeDraftMessage(raw: raw, id: "dm\(draftCounter)", threadId: threadId ?? "dm\(draftCounter)")
+        return GmailDraftRef(id: id, messageId: "dm\(draftCounter)", threadId: threadId ?? "dm\(draftCounter)")
+    }
+    /// Keeps the draft as Gmail would: a message with the DRAFT label whose files are fetched separately.
+    private func storeDraftMessage(raw: String, id: String, threadId: String) {
+        let text = String(decoding: MIMEParser.decodeBase64URL(raw) ?? Data(), as: UTF8.self)
+        func split(_ block: Substring) -> (headers: [GmailHeader], body: String) {
+            let pieces = block.components(separatedBy: "\r\n\r\n")
+            let headers = pieces[0].components(separatedBy: "\r\n").compactMap { line -> GmailHeader? in
+                guard let colon = line.firstIndex(of: ":") else { return nil }
+                return GmailHeader(name: String(line[..<colon]), value: line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces))
+            }
+            return (headers, pieces.dropFirst().joined(separator: "\r\n\r\n"))
+        }
+        func bytes(_ base64: String) -> Data { Data(base64Encoded: base64.replacingOccurrences(of: "\r\n", with: "")) ?? Data() }
+        let (headers, body) = split(Substring(text))
+        let type = headers.first { $0.name == "Content-Type" }?.value ?? ""
+        var parts: [GmailMessagePart] = []
+        if let range = type.range(of: "boundary=\"") {
+            let boundary = String(type[range.upperBound...].prefix { $0 != "\"" })
+            let chunks = body.components(separatedBy: "--\(boundary)").dropFirst().filter { !$0.hasPrefix("--") }
+            for (index, chunk) in chunks.enumerated() {
+                let (partHeaders, partBody) = split(Substring(chunk.trimmingCharacters(in: .whitespacesAndNewlines)))
+                let data = bytes(partBody)
+                let partType = partHeaders.first { $0.name == "Content-Type" }?.value ?? ""
+                if index == 0 {
+                    parts.append(GmailMessagePart(partId: "0", mimeType: "text/plain", body: GmailBody(data: MIMEBuilder.base64URL(data))))
+                } else {
+                    let disposition = partHeaders.first { $0.name == "Content-Disposition" }?.value ?? ""
+                    let name = disposition.components(separatedBy: "filename=\"").last?.replacingOccurrences(of: "\"", with: "") ?? "file"
+                    let attachmentId = "\(id)-file\(index)"
+                    attachmentData[attachmentId] = data
+                    parts.append(GmailMessagePart(
+                        partId: "\(index)", mimeType: String(partType.prefix { $0 != ";" }), filename: name,
+                        headers: partHeaders, body: GmailBody(size: data.count, attachmentId: attachmentId)
+                    ))
+                }
+            }
+        }
+        let payload = parts.isEmpty
+            ? GmailMessagePart(mimeType: "text/plain", headers: headers, body: GmailBody(data: MIMEBuilder.base64URL(bytes(body))))
+            : GmailMessagePart(mimeType: "multipart/mixed", headers: headers, parts: parts)
+        draftClock += 60
+        messages[id] = GmailMessage(id: id, threadId: threadId, labelIds: [SystemLabel.draft], internalDate: String(draftClock * 1000), payload: payload)
+    }
+    private var draftClock = 1_700_000_000
+    func createDraft(raw: String, threadId: String?) async throws -> GmailDraftRef {
+        draftCounter += 1
+        let id = "d\(draftCounter)"
+        savedDrafts[id] = (raw, threadId, "dm\(draftCounter)")
+        draftOrder.insert(id, at: 0)
+        storeDraftMessage(raw: raw, id: "dm\(draftCounter)", threadId: threadId ?? "dm\(draftCounter)")
+        return GmailDraftRef(id: id, messageId: "dm\(draftCounter)", threadId: threadId ?? "dm\(draftCounter)")
+    }
+    func drafts() async throws -> [GmailDraftRef] {
+        draftOrder.compactMap { id in savedDrafts[id].map { GmailDraftRef(id: id, messageId: $0.messageId, threadId: $0.threadId ?? $0.messageId) } }
+    }
+    func draft(id: String) async throws -> GmailDraftRef? {
+        savedDrafts[id].map { GmailDraftRef(id: id, messageId: $0.messageId, threadId: $0.threadId ?? $0.messageId) }
+    }
+    func deleteDraft(id: String) async throws {
+        guard let removed = savedDrafts.removeValue(forKey: id) else { throw GmailError.notFound }
+        messages[removed.messageId] = nil
+        draftOrder.removeAll { $0 == id }
+    }
     func sendDraft(id: String) async throws -> String? { nil }
 
     var attachmentData: [String: Data] = [:]

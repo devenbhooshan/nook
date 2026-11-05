@@ -52,6 +52,32 @@ struct SyncEngineTests {
         #expect(await gmail.fullFetches == ["new-draft"])
     }
 
+    @Test func loadsOlderMailOnRequestSkippingWhatsStored() async throws {
+        await engine.configure(initialLimit: 1)
+        try await engine.sync(account)
+        #expect(repo.messageIds(account: account).count == 1)
+        await gmail.resetCounters()
+
+        let progress = DelayLog()
+        let added = try await engine.loadOlderMail(account: account, query: MailHistory.query(years: MailHistory.everything)!) { done, total in
+            progress.append(done, Double(total))
+        }
+        #expect(added == 2)
+        #expect(repo.messageIds(account: account) == ["1", "2", "3"])
+        #expect(await gmail.fullFetches.count == 2, "what was stored isn't fetched again")
+        #expect(progress.entries.last?.0 == 2 && progress.entries.last?.1 == 2, "finishes at 2 of 2")
+        #expect(try await engine.loadOlderMail(account: account, query: "-in:spam -in:trash") == 0)
+    }
+
+    @Test func historyChoices() {
+        #expect(MailHistory.query(years: 0) == nil)
+        #expect(MailHistory.query(years: 3) == "newer_than:3y -in:spam -in:trash")
+        #expect(MailHistory.covers(MailHistory.everything, 4))
+        #expect(MailHistory.covers(4, 2))
+        #expect(!MailHistory.covers(2, 4))
+        #expect(!MailHistory.covers(4, MailHistory.everything))
+    }
+
     @Test func storesInBatchesAndNotifiesAsItGoes() async throws {
         await engine.configure(batchSize: 1)
         try await engine.sync(account)

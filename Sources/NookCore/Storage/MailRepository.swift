@@ -93,6 +93,7 @@ public final class MailRepository: @unchecked Sendable {
         try db.transaction {
             try db.execute("DELETE FROM messages WHERE account = ?", [email])
             try db.execute("DELETE FROM message_bodies WHERE account = ?", [email])
+            try db.execute("DELETE FROM attachment_files WHERE account = ?", [email])
             try db.execute("DELETE FROM message_tags WHERE account = ?", [email])
             try db.execute("DELETE FROM messages_fts WHERE rowid IN (SELECT fts_rowid FROM fts_map WHERE account = ?)", [email])
             try db.execute("DELETE FROM fts_map WHERE account = ?", [email])
@@ -233,6 +234,7 @@ public final class MailRepository: @unchecked Sendable {
             for id in ids {
                 try db.execute("DELETE FROM messages WHERE account = ? AND id = ?", [account, id])
                 try db.execute("DELETE FROM message_bodies WHERE account = ? AND id = ?", [account, id])
+                try db.execute("DELETE FROM attachment_files WHERE account = ? AND message_id = ?", [account, id])
                 try db.execute("DELETE FROM message_tags WHERE account = ? AND message_id = ?", [account, id])
                 try deleteFromSearch(account: account, id: id)
             }
@@ -273,6 +275,76 @@ public final class MailRepository: @unchecked Sendable {
             [account, limit]
         )) ?? []
         return rows.map { $0.string("id") }
+    }
+
+    // MARK: Attachment files
+
+    /// A file's bytes, if they've been downloaded.
+    public func storedAttachment(account: String, messageId: String, partId: String) -> Data? {
+        let rows = try? reader.query(
+            "SELECT data FROM attachment_files WHERE account = ? AND message_id = ? AND part_id = ?",
+            [account, messageId, partId]
+        )
+        return rows?.first?.data("data")
+    }
+
+    /// Messages whose files haven't been looked at yet, newest first. Once `budget` bytes are stored, only mail newer
+    /// than the oldest kept file qualifies: anything older would be thrown out again straight away.
+    public func messagesAwaitingAttachments(account: String, budget: Int, limit: Int) -> [String] {
+        var floor = 0.0
+        if let totals = (try? reader.query(
+            """
+            SELECT COALESCE(SUM(length(f.data)), 0) AS bytes, MIN(m.date) AS oldest
+            FROM attachment_files f JOIN messages m ON m.account = f.account AND m.id = f.message_id
+            WHERE f.data IS NOT NULL
+            """
+        ))?.first, totals.int("bytes") >= budget {
+            floor = totals.double("oldest")
+        }
+        let rows = (try? reader.query(
+            """
+            SELECT m.id FROM messages m
+            WHERE m.account = ? AND m.has_attachments = 1 AND m.date > ?
+              AND NOT EXISTS (SELECT 1 FROM attachment_files f WHERE f.account = m.account AND f.message_id = m.id)
+            ORDER BY m.date DESC LIMIT ?
+            """,
+            [account, floor, limit]
+        )) ?? []
+        return rows.map { $0.string("id") }
+    }
+
+    /// Records what was downloaded for a message. A nil means that file isn't kept. An empty list still marks the
+    /// message as done.
+    public func storeAttachments(account: String, messageId: String, files: [(partId: String, data: Data?)]) throws {
+        try db.transaction {
+            for file in files.isEmpty ? [(partId: "", data: nil)] : files {
+                try db.execute(
+                    "INSERT OR REPLACE INTO attachment_files(account, message_id, part_id, data) VALUES (?, ?, ?, ?)",
+                    [account, messageId, file.partId, file.data]
+                )
+            }
+        }
+    }
+
+    /// Drops the files on the oldest mail until the stored files fit in `budget` bytes.
+    public func trimStoredAttachments(toBudget budget: Int) throws {
+        let rows = try db.query(
+            """
+            SELECT f.rowid AS row, length(f.data) AS bytes
+            FROM attachment_files f JOIN messages m ON m.account = f.account AND m.id = f.message_id
+            WHERE f.data IS NOT NULL ORDER BY m.date
+            """
+        )
+        var excess = rows.reduce(0) { $0 + $1.int("bytes") } - budget
+        for row in rows where excess > 0 {
+            try db.execute("UPDATE attachment_files SET data = NULL WHERE rowid = ?", [row.int("row")])
+            excess -= row.int("bytes")
+        }
+    }
+
+    /// After the limit goes up: files dropped or skipped earlier get another look.
+    public func retrySkippedAttachments() throws {
+        try db.execute("DELETE FROM attachment_files WHERE data IS NULL")
     }
 
     /// Adds and removes labels on every message in a thread. Returns the labels from before the change, for undo.
@@ -468,7 +540,10 @@ public final class MailRepository: @unchecked Sendable {
             arguments.append(account)
         }
         if let fts = search.ftsExpression {
-            clauses.append("(m.account, m.id) IN (SELECT account, id FROM messages_fts WHERE messages_fts MATCH ?)")
+            clauses.append("""
+            (m.account, m.id) IN (SELECT f.account, f.id FROM fts_map f
+                WHERE f.fts_rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))
+            """)
             arguments.append(fts)
         }
         for value in search.from {
@@ -779,21 +854,24 @@ public final class MailRepository: @unchecked Sendable {
     }
 
     /// Messages the tagger hasn't looked at yet, newest first. Messages you sent are skipped.
-    public func untaggedMessages(limit: Int) -> [MailMessage] {
+    /// Mail waiting for the tagger, newest first. `since` skips older mail, so loading years of history
+    /// doesn't queue tens of thousands of messages for the on-device model.
+    public func untaggedMessages(limit: Int, since: Date? = nil) -> [MailMessage] {
         let rows = (try? db.query(
             """
             \(Self.selectWithBodies)
-            WHERE m.tagged = 0 AND m.labels NOT LIKE '%,SENT,%' AND m.labels NOT LIKE '%,SPAM,%' AND m.labels NOT LIKE '%,DRAFT,%'
+            WHERE m.tagged = 0 AND m.date >= ? AND m.labels NOT LIKE '%,SENT,%' AND m.labels NOT LIKE '%,SPAM,%' AND m.labels NOT LIKE '%,DRAFT,%'
             ORDER BY m.date DESC LIMIT ?
             """,
-            [limit]
+            [since ?? Date(timeIntervalSince1970: 0), limit]
         )) ?? []
         return rows.map(Self.message(from:))
     }
 
-    public func untaggedCount() -> Int {
+    public func untaggedCount(since: Date? = nil) -> Int {
         (try? db.query(
-            "SELECT COUNT(*) AS n FROM messages WHERE tagged = 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,DRAFT,%'"
+            "SELECT COUNT(*) AS n FROM messages WHERE tagged = 0 AND date >= ? AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,DRAFT,%'",
+            [since ?? Date(timeIntervalSince1970: 0)]
         ))?.first?.int("n") ?? 0
     }
 

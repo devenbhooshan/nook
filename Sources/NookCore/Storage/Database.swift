@@ -18,6 +18,8 @@ public struct Row {
     public func string(_ column: String) -> String { values[column] as? String ?? "" }
     public func optionalString(_ column: String) -> String? { values[column] as? String }
 
+    public func data(_ column: String) -> Data? { values[column] as? Data }
+
     public func int(_ column: String) -> Int {
         if let v = values[column] as? Int64 { return Int(v) }
         if let v = values[column] as? Double { return Int(v) }
@@ -74,6 +76,10 @@ public final class Database: @unchecked Sendable {
             guard !readOnly else { return }
             try run("PRAGMA journal_mode=WAL")
             try run("PRAGMA synchronous=NORMAL")
+            // Every page read from disk is decrypted and checked. Keep plenty decrypted in memory (up to 128 MB),
+            // so searching years of mail doesn't decrypt the same pages again on each keystroke.
+            try run("PRAGMA cache_size = -131072")
+            try run("PRAGMA temp_store = MEMORY")
             try Schema.migrate(self)
         } catch let error as DatabaseError where error.message == "file is not a database" {
             // An encrypted store opened without its key looks like garbage to SQLite.
@@ -153,6 +159,10 @@ public final class Database: @unchecked Sendable {
                 case SQLITE_INTEGER: row.values[name] = sqlite3_column_int64(statement, i)
                 case SQLITE_FLOAT: row.values[name] = sqlite3_column_double(statement, i)
                 case SQLITE_TEXT: row.values[name] = String(cString: sqlite3_column_text(statement, i))
+                case SQLITE_BLOB:
+                    if let bytes = sqlite3_column_blob(statement, i) {
+                        row.values[name] = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, i)))
+                    }
                 default: break
                 }
             }
@@ -200,6 +210,8 @@ public final class Database: @unchecked Sendable {
             }
             switch argument {
             case let v as String: sqlite3_bind_text(statement, index, v, -1, SQLITE_TRANSIENT)
+            case let v as Data:
+                _ = v.withUnsafeBytes { sqlite3_bind_blob(statement, index, $0.baseAddress, Int32($0.count), SQLITE_TRANSIENT) }
             case let v as Int: sqlite3_bind_int64(statement, index, Int64(v))
             case let v as Int64: sqlite3_bind_int64(statement, index, v)
             case let v as Double: sqlite3_bind_double(statement, index, v)
@@ -219,7 +231,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 10
+    static let version = 12
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -264,6 +276,21 @@ enum Schema {
                 }
             }),
             (10, { try db.run(ThreadIndex.remindersSQL) }),
+            (11, {
+                // Attachment files, downloaded in the background. A row with no data was looked at and not kept.
+                try db.run("""
+                CREATE TABLE IF NOT EXISTS attachment_files(
+                    account TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    part_id TEXT NOT NULL,
+                    data BLOB,
+                    PRIMARY KEY(account, message_id, part_id)
+                )
+                """)
+            }),
+            // Search finds messages by their search rowid. Without this, every match read its account and id
+            // back out of the search table, which crawled with years of mail.
+            (12, { try db.run("CREATE INDEX IF NOT EXISTS fts_map_rowid ON fts_map(fts_rowid)") }),
         ]
         for (number, step) in steps where current < number {
             try step()

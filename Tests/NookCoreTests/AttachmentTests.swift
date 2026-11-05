@@ -151,6 +151,40 @@ struct GmailUploadTests {
     }
 }
 
+@Suite("Saving drafts")
+struct GmailDraftTests {
+    @Test func aNewDraftKeepsItsConversation() async throws {
+        let transport = StubTransport([.init(200, #"{"id":"r1","message":{"id":"m1","threadId":"T"}}"#)])
+        let client = GmailClient(transport: transport, tokens: StaticTokens(), rateLimiter: nil)
+        let ref = try await client.createDraft(raw: "abc", threadId: "T")
+        #expect(ref == GmailDraftRef(id: "r1", messageId: "m1", threadId: "T"))
+        let request = try #require(transport.requests.first)
+        #expect(request.httpMethod == "POST")
+        #expect(request.url?.absoluteString == "https://gmail.googleapis.com/gmail/v1/users/me/drafts")
+        let body = try #require(try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any])
+        let message = try #require(body["message"] as? [String: Any])
+        #expect(message["raw"] as? String == "abc")
+        #expect(message["threadId"] as? String == "T")
+    }
+
+    @Test func aBigDraftGoesThroughTheUploadEndpoint() async throws {
+        let transport = StubTransport([.init(200, #"{"id":"r1","message":{"id":"m1","threadId":"T"}}"#)])
+        let client = GmailClient(transport: transport, tokens: StaticTokens(), rateLimiter: nil)
+        let big = MIMEBuilder.base64URL(Data(repeating: 65, count: GmailClient.simpleRequestLimit + 10))
+        try await client.createDraft(raw: big, threadId: nil)
+        let request = try #require(transport.requests.first)
+        #expect(request.url?.absoluteString.hasPrefix("https://gmail.googleapis.com/upload/gmail/v1/users/me/drafts?uploadType=multipart") == true)
+        #expect(String(decoding: request.httpBody ?? Data(), as: UTF8.self).contains("{\"message\":{}}"))
+    }
+
+    @Test func aFailedSaveIsNotRetried() async throws {
+        let transport = StubTransport([.init(503), .init(200)])
+        let client = GmailClient(transport: transport, tokens: StaticTokens(), rateLimiter: nil)
+        await #expect(throws: (any Error).self) { try await client.createDraft(raw: "abc", threadId: nil) }
+        #expect(transport.requests.count == 1)
+    }
+}
+
 @Suite("Attachment quarantine")
 struct AttachmentQuarantineTests {
     private func file(_ name: String) throws -> URL {

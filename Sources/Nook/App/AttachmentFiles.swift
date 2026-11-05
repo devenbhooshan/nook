@@ -65,6 +65,30 @@ final class AttachmentFiles {
         return url
     }
 
+    /// The bytes of a file going out with a draft.
+    func data(_ attachment: OutgoingAttachment) async throws -> Data {
+        switch attachment.source {
+        case .data(let data): return data
+        case .gmail(let account, let messageId, let original):
+            return try await data(AttachmentRef(attachment: original, account: account, messageId: messageId))
+        }
+    }
+
+    /// A file going out with a draft as a real file, for Quick Look.
+    func temporaryFile(_ attachment: OutgoingAttachment) async throws -> URL {
+        if case .gmail(let account, let messageId, let original) = attachment.source {
+            return try await temporaryFile(AttachmentRef(attachment: original, account: account, messageId: messageId))
+        }
+        let folder = Self.temporaryRoot.appendingPathComponent(Self.folderName(for: attachment.id.uuidString), isDirectory: true)
+        let url = folder.appendingPathComponent(Self.safeFilename(attachment.filename))
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        let data = try await data(attachment)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: Self.temporaryRoot.path)
+        try data.write(to: url, options: [.atomic])
+        return url
+    }
+
     /// Saves into Downloads, numbering the name if a file is already there. Returns where each one went.
     func saveToDownloads(_ refs: [AttachmentRef]) async throws -> [URL] {
         let downloads = try FileManager.default.url(for: .downloadsDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -136,6 +160,25 @@ extension Attachment {
 
     var formattedSize: String {
         size > 0 ? ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file) : ""
+    }
+}
+
+/// What ⌘V would attach to a draft. Text on the clipboard stays text, even with a picture of it alongside,
+/// which is how Word and Excel copy; only a copied file, or an image on its own such as a screenshot, is attached.
+enum PastedFiles: Equatable {
+    case files([URL])
+    case image(Data)
+
+    static func read(_ pasteboard: NSPasteboard) -> PastedFiles? {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL], !urls.isEmpty {
+            return .files(urls)
+        }
+        guard pasteboard.string(forType: .string)?.isEmpty != false else { return nil }
+        if let png = pasteboard.data(forType: .png) { return .image(png) }
+        guard let tiff = pasteboard.data(forType: .tiff),
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return nil }
+        return .image(png)
     }
 }
 

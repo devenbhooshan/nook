@@ -76,7 +76,7 @@ struct TaggerTests {
             return "NONE"
         }
         let updates = Counter()
-        let tagger = Tagger(repo: repo, batchSize: 2, modelProvider: { model }, onUpdate: { _ in updates.increment() })
+        let tagger = Tagger(repo: repo, batchSize: 2, recentDays: nil, modelProvider: { model }, onUpdate: { _ in updates.increment() })
 
         await tagger.run()
         #expect(repo.tags(account: "me@example.com", messageId: "1") == ["Receipt"])
@@ -95,7 +95,7 @@ struct TaggerTests {
             }
             return "Receipt"
         }
-        await Tagger(repo: repo, modelProvider: { model }).run()
+        await Tagger(repo: repo, recentDays: nil, modelProvider: { model }).run()
         #expect(repo.untaggedCount() == 0)
     }
 
@@ -105,7 +105,7 @@ struct TaggerTests {
         let statuses = StatusLog()
         let model = ScriptedModel { _ in throw URLError(.cannotConnectToHost) }
 
-        await Tagger(repo: repo, modelProvider: { model }, onUpdate: { statuses.append($0) }).run()
+        await Tagger(repo: repo, recentDays: nil, modelProvider: { model }, onUpdate: { statuses.append($0) }).run()
         #expect(repo.untaggedCount() == 2)
         #expect(statuses.last?.isRunning == false)
         #expect(statuses.last?.lastError != nil)
@@ -115,7 +115,7 @@ struct TaggerTests {
         let repo = try makeRepository()
         try repo.upsert([.fixture(id: "1")])
         let statuses = StatusLog()
-        await Tagger(repo: repo, modelProvider: { nil }, onUpdate: { statuses.append($0) }).run()
+        await Tagger(repo: repo, recentDays: nil, modelProvider: { nil }, onUpdate: { statuses.append($0) }).run()
         #expect(repo.untaggedCount() == 1)
         #expect(statuses.last?.pending == 1)
     }
@@ -189,5 +189,17 @@ struct OllamaStatusTests {
         #expect(OllamaStatus.notRunning.setupCommands(model: "qwen3") == "brew install ollama\nbrew services start ollama\nollama pull qwen3")
         #expect(OllamaStatus.missingModel("qwen3").setupCommands(model: "qwen3") == "ollama pull qwen3")
         #expect(OllamaStatus.ready("qwen3").setupCommands(model: "qwen3") == nil)
+    }
+
+    @Test func leavesOldMailForHandTagging() async throws {
+        let repo = try makeRepository()
+        try repo.upsert([.fixture(id: "old", subject: "Your receipt")])
+        var recent = MailMessage.fixture(id: "new", subject: "Your receipt")
+        recent.date = Date().addingTimeInterval(-86_400)
+        try repo.upsert([recent])
+        let model = ScriptedModel { _ in "Receipt" }
+        await Tagger(repo: repo, modelProvider: { model }).run()
+        #expect(repo.tags(account: "me@example.com", messageId: "new") == ["Receipt"])
+        #expect(repo.tags(account: "me@example.com", messageId: "old").isEmpty)
     }
 }

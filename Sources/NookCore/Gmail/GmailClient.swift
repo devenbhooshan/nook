@@ -34,7 +34,14 @@ public protocol GmailService: Sendable {
     @discardableResult func send(raw: String, threadId: String?) async throws -> String?
     /// The id of the Gmail draft holding this message, or nil if there's no such draft any more.
     func draftID(messageId: String) async throws -> String?
-    func updateDraft(id: String, raw: String, threadId: String?) async throws
+    @discardableResult func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef
+    @discardableResult func createDraft(raw: String, threadId: String?) async throws -> GmailDraftRef
+    /// Every draft in the account, newest first, as Gmail lists them.
+    func drafts() async throws -> [GmailDraftRef]
+    /// One draft by id, or nil if it was sent or deleted. Unlike the listing, this sees a draft made a moment ago.
+    func draft(id: String) async throws -> GmailDraftRef?
+    /// Deletes a draft for good. Gmail keeps no copy in Trash.
+    func deleteDraft(id: String) async throws
     /// Sends a draft. Returns the conversation Gmail put it in.
     @discardableResult func sendDraft(id: String) async throws -> String?
     /// The bytes of one attachment.
@@ -210,16 +217,54 @@ public struct GmailClient: GmailService {
         return nil
     }
 
-    public func updateDraft(id: String, raw: String, threadId: String?) async throws {
+    @discardableResult
+    public func createDraft(raw: String, threadId: String?) async throws -> GmailDraftRef {
+        var message: [String: Any] = [:]
+        if let threadId { message["threadId"] = threadId }
+        if raw.utf8.count > Self.simpleRequestLimit {
+            return try GmailDraftRef.decode(await upload("drafts", method: "POST", metadata: ["message": message], raw: raw, retryServerErrors: false))
+        }
+        message["raw"] = raw
+        // Like sending: a 5xx can arrive after Gmail made the draft, and retrying would make a second one.
+        return try GmailDraftRef.decode(await request("drafts", method: "POST", body: ["message": message], retryServerErrors: false))
+    }
+
+    @discardableResult
+    public func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef {
         if raw.utf8.count > Self.simpleRequestLimit {
             var message: [String: Any] = [:]
             if let threadId { message["threadId"] = threadId }
-            _ = try await upload("drafts/\(id)", method: "PUT", metadata: ["id": id, "message": message], raw: raw)
-            return
+            return try GmailDraftRef.decode(await upload("drafts/\(id)", method: "PUT", metadata: ["id": id, "message": message], raw: raw))
         }
         var message: [String: Any] = ["raw": raw]
         if let threadId { message["threadId"] = threadId }
-        _ = try await request("drafts/\(id)", method: "PUT", body: ["id": id, "message": message])
+        return try GmailDraftRef.decode(await request("drafts/\(id)", method: "PUT", body: ["id": id, "message": message]))
+    }
+
+    public func drafts() async throws -> [GmailDraftRef] {
+        struct Page: Decodable { var drafts: [GmailDraftRef]?; var nextPageToken: String? }
+        var all: [GmailDraftRef] = []
+        var pageToken: String?
+        repeat {
+            var items = [URLQueryItem(name: "maxResults", value: "500")]
+            if let pageToken { items.append(URLQueryItem(name: "pageToken", value: pageToken)) }
+            let page: Page = try await get("drafts", query: items)
+            all += page.drafts ?? []
+            pageToken = page.nextPageToken
+        } while pageToken != nil
+        return all
+    }
+
+    public func draft(id: String) async throws -> GmailDraftRef? {
+        do {
+            return try GmailDraftRef.decode(await request("drafts/\(id)", query: [URLQueryItem(name: "format", value: "minimal")]))
+        } catch GmailError.notFound {
+            return nil
+        }
+    }
+
+    public func deleteDraft(id: String) async throws {
+        _ = try await request("drafts/\(id)", method: "DELETE", retryServerErrors: false)
     }
 
     @discardableResult
@@ -325,5 +370,31 @@ public struct GmailClient: GmailService {
         struct Envelope: Decodable { struct Inner: Decodable { var message: String? }; var error: Inner? }
         if let message = (try? JSONDecoder().decode(Envelope.self, from: data))?.error?.message { return message }
         return String(decoding: data.prefix(300), as: UTF8.self)
+    }
+}
+
+/// A Gmail draft: its own id, which stays the same across edits, and the message it holds now, which doesn't.
+public struct GmailDraftRef: Sendable, Equatable, Decodable {
+    public var id: String
+    public var messageId: String
+    public var threadId: String?
+
+    public init(id: String, messageId: String, threadId: String? = nil) {
+        self.id = id
+        self.messageId = messageId
+        self.threadId = threadId
+    }
+
+    private struct Message: Decodable { var id: String; var threadId: String? }
+    private enum CodingKeys: String, CodingKey { case id, message }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let message = try container.decode(Message.self, forKey: .message)
+        self.init(id: try container.decode(String.self, forKey: .id), messageId: message.id, threadId: message.threadId)
+    }
+
+    static func decode(_ data: Data) throws -> GmailDraftRef {
+        try JSONDecoder().decode(GmailDraftRef.self, from: data)
     }
 }

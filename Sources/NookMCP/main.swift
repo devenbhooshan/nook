@@ -2,6 +2,7 @@
 //
 // MCP clients (Claude Code, Claude Desktop, and others) launch this binary and talk to it over stdio.
 // It reads the same local database as the app and is off until turned on in Nook → Settings → Integrations.
+// get_attachment downloads a file Nook hasn't stored yet, with the account's Nook sign-in.
 //
 //   claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 //
@@ -21,11 +22,17 @@ func databasePath() throws -> String {
 do {
     // The store is encrypted; its key comes from the Keychain. nook-mcp is signed with Nook's identity,
     // so the Keychain hands it over without asking.
-    let repo = try MailStore.openForReading(path: try databasePath(), secrets: KeychainStore())
+    let secrets = KeychainStore()
+    let repo = try MailStore.openForReading(path: try databasePath(), secrets: secrets)
     let server = MCPServer(
         repo: repo,
         isEnabled: { MCPSettings.isEnabled() },
-        openURL: { NSWorkspace.shared.open($0) }
+        openURL: { NSWorkspace.shared.open($0) },
+        makeGmail: { email in
+            guard let tokens = secrets.tokens(for: email) else { throw GmailError.notSignedIn(email) }
+            let provider = OAuthTokenProvider(email: email, tokens: tokens, config: GoogleClientConfig.load(from: secrets), store: secrets)
+            return GmailClient(tokens: provider)
+        }
     )
     server.run()
 } catch {

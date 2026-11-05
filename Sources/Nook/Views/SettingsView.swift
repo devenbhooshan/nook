@@ -127,6 +127,10 @@ private struct AccountsSettings: View {
                 }
             }
 
+            if !store.accounts.isEmpty {
+                MailHistorySection()
+            }
+
             if store.hasGoogleClient {
                 Section {
                     GoogleClientForm()
@@ -142,6 +146,33 @@ private struct AccountsSettings: View {
             Button("Remove Account and Local Mail", role: .destructive) { store.removeAccount(account.email) }
         } message: { _ in
             Text("Nook deletes this account's mail from this Mac and forgets its sign-in. Nothing changes in Gmail.")
+        }
+    }
+}
+
+/// How far back to keep mail. Older mail loads in the background, after the first sync.
+private struct MailHistorySection: View {
+    @EnvironmentObject private var store: AppStore
+    @AppStorage(MailHistory.yearsKey) private var years = 0
+
+    var body: some View {
+        Section {
+            Picker("Keep mail from", selection: $years) {
+                ForEach(MailHistory.choices, id: \.self) { choice in
+                    Text(choice == 0 || choice == MailHistory.everything ? MailHistory.label(years: choice) : "The last \(MailHistory.label(years: choice))").tag(choice)
+                }
+            }
+            .onChange(of: years) { _, _ in store.loadMailHistoryIfNeeded() }
+            ForEach(store.accounts.filter { store.historyProgress[$0.email] != nil }) { account in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Loading older mail for \(account.email)…").font(.caption).foregroundStyle(.secondary)
+                    ProgressView(value: store.historyProgress[account.email] ?? 0)
+                }
+            }
+        } header: {
+            Text("Mail history")
+        } footer: {
+            Text("Nook starts with your inbox and the last 60 days. Older mail downloads in the background, encrypted on this Mac, and you can use Nook meanwhile. All mail can take a while on a big mailbox. Picking less later keeps what's already here.")
         }
     }
 }
@@ -430,7 +461,7 @@ private struct IntegrationsSettings: View {
             }
 
             Section("Tools") {
-                LabeledContent("Read", value: "list_accounts, list_tags, search_threads, get_thread")
+                LabeledContent("Read", value: "list_accounts, list_tags, search_threads, get_thread, get_attachment")
                 LabeledContent("Draft (opens in Nook)", value: "draft_reply, compose_draft")
             }
         }
@@ -442,6 +473,7 @@ private struct PrivacySettings: View {
     @EnvironmentObject private var store: AppStore
     @AppStorage("privacy.blockRemoteContent") private var blockRemoteContent = true
     @AppStorage(BrandLogos.enabledKey) private var brandLogos = false
+    @AppStorage(AttachmentStorage.limitKey) private var attachmentLimit = AttachmentStorage.defaultGigabytes
 
     var body: some View {
         Form {
@@ -455,6 +487,17 @@ private struct PrivacySettings: View {
                     .onChange(of: brandLogos) { _, enabled in store.setBrandLogos(enabled) }
             } footer: {
                 Text("Uses BIMI: Nook looks up each sender's domain in DNS and downloads the logo from the company's own server, once. That company can see the request. Off by default.")
+            }
+            Section {
+                Picker("Keep attachments on this Mac", selection: $attachmentLimit) {
+                    ForEach(AttachmentStorage.choices, id: \.self) { Text("\($0) GB").tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: attachmentLimit) { old, new in
+                    if new > old { try? store.repo.retrySkippedAttachments() }
+                }
+            } footer: {
+                Text("Files download in the background, encrypted, so they open instantly. Past this limit the oldest mail's files go, and download from Gmail when you need them. Files over 25 MB always stay in Gmail.")
             }
             Section("Where your data lives") {
                 LabeledContent("Mail and tags") {

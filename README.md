@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 
 - **Split inbox.** Tags become tabs (*Needs Reply*, *Newsletter*, …) and everything else lands in *Other*. Press Tab to work through them one at a time.
 - **On-device AI tagging.** New mail is tagged with labels you define, such as *Needs Reply*, *Receipt* or *Newsletter*, by **Apple Intelligence** or any model you run in **[Ollama](https://ollama.com)**, including your own fine-tunes. No email content leaves your Mac.
-- **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
+- **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and its attachments, and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Reminders.** Press `h` to be reminded about a conversation at a time you pick or type ("fri 2pm", "3d"): a pop-up that stays until you deal with it, and the conversation at the top of your inbox. When you send, ask to be reminded if nobody replies.
 - **Your calendar, a key away.** Press `t` for today and tomorrow at a glance, with a Join button for the next call, or `g c` for a day view of your Google Calendar, across all your accounts.
@@ -75,7 +75,7 @@ Your browser opens Google's sign-in. Expect two screens:
 - **"Google hasn't verified this app."** This is expected for your own client. Click **Continue**.
 - **"Select what Nook can access."** Make sure **Read, compose, and send emails from your Gmail account** is ticked, then click **Continue**. The contacts and directory boxes are for profile photos; leave them unticked and Nook shows initials instead. The calendar box lets Nook show your schedule (read-only); leave it unticked and the calendar stays empty.
 
-Google then redirects to a one-time listener on `127.0.0.1`, and Nook takes over. The first sync downloads your inbox plus the last 60 days. Add more accounts in **Settings → Accounts**.
+Google then redirects to a one-time listener on `127.0.0.1`, and Nook takes over. The first sync downloads your inbox plus the last 60 days. To keep older mail, pick 1 to 4 years or All mail under **Settings → Accounts → Mail history**; it downloads in the background while you use Nook. Add more accounts in **Settings → Accounts**.
 
 You can also provide the client through `NOOK_GOOGLE_CLIENT_ID` and `NOOK_GOOGLE_CLIENT_SECRET` environment variables.
 
@@ -156,13 +156,13 @@ Files show up under the message they came with. Images and PDFs get a preview; o
 - **Right-click** for Save to Downloads, Save As… and Show in Finder. With more than one file, **Save all to Downloads** saves them together. These are also in the ⌘K palette.
 - Images placed inside an email (screenshots pasted into Gmail, logos in a signature) show where the sender put them, and aren't listed again as files.
 
-Files stay in Gmail until you use one. Nook then downloads it straight from Gmail and keeps it in memory. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
+Nook downloads attachments in the background, newest mail first, and keeps them in its encrypted store, so they open instantly. It keeps up to 50 GB (change this in **Settings → Privacy**), dropping the oldest mail's files past that, and leaves files over 25 MB in Gmail. Anything not stored is downloaded from Gmail when you use it. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
 
-To send files, press `⌘⇧A` or click the paperclip, or drop files anywhere on the message. Gmail's limit is 25 MB per message, and Nook tells you before you press Send. Forwarding keeps the original's files, and a Gmail draft opened in Nook keeps its attachments; both are fetched from Gmail when you send. Assistants connected over MCP see file names, types and sizes, never the files themselves.
+To send files, press `⌘⇧A` or click the paperclip, drop files anywhere on the message, or paste with `⌘V`: a copied file or a screenshot is attached, and copied text stays text. Images and PDFs show a thumbnail, and clicking a file previews it in Quick Look. Gmail's limit is 25 MB per message, and Nook tells you before you press Send. Forwarding keeps the original's files, and a Gmail draft opened in Nook keeps its attachments; both are fetched from Gmail when you send. Assistants connected over MCP see file names, types and sizes, and can read a file you ask them about with `get_attachment`, which reads Nook's stored copy, or downloads that one file from Gmail if it isn't stored yet.
 
 ## Drafts
 
-Drafts you start in Gmail, on any device, show up under **Drafts** (`g d`), one row per draft with who it's to. Open one to finish it in Nook. **Send** sends that Gmail draft, so it disappears from Drafts everywhere; **Close** keeps it, and asks whether to save your changes back to Gmail. A message you start in Nook isn't saved as a draft yet: discarding it discards it.
+Drafts you start in Gmail, on any device, show up under **Drafts** (`g d`), one row per draft with who it's to. Open one to finish it in Nook. **Send** sends that Gmail draft, so it disappears from Drafts everywhere; **Close** keeps it, and asks whether to save your changes back to Gmail. To keep a message you start in Nook, press **Save Draft** (`⌘S`), or choose it when you discard: it goes to Drafts in Gmail, so you can finish it on any device. Nook doesn't save as you type, and a "remind me if no reply" choice isn't kept with the draft.
 
 ## Search
 
@@ -177,7 +177,7 @@ File names are part of the full-text index too, so searching `invoice` finds the
 
 ## Tagging and the split inbox
 
-Each tag has a name and a plain-language description. The model reads the description to decide whether the tag fits, so the descriptions are the "custom model": edit them in **Settings → Tags** to teach Nook what each tag means to you. Tags you add by hand (`l`) are never overwritten.
+Each tag has a name and a plain-language description. The model reads the description to decide whether the tag fits, so the descriptions are the "custom model": edit them in **Settings → Tags** to teach Nook what each tag means to you. Tags you add by hand (`l`) are never overwritten. Only mail from the last 60 days is tagged automatically; older mail loaded through **Mail history** stays untagged unless you tag it by hand.
 
 Tags marked **Inbox tab** become tabs across the top of the inbox. By default those are Needs Reply, Newsletter, Receipt and Notification. Conversations that don't fall into any tab show up under **Other**.
 
@@ -211,11 +211,16 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 | `list_accounts` | Connected accounts and unread counts |
 | `list_tags` | Tags, their descriptions, and inbox counts |
 | `search_threads` | Search with Nook's syntax (`from:`, `tag:`, `is:unread`, …), by mailbox, tag or account |
-| `get_thread` | Every message in a conversation, as plain text, with the names of attached files |
-| `draft_reply` | Opens a reply in Nook, prefilled, for you to review |
-| `compose_draft` | Opens a new message in Nook, prefilled, for you to review |
+| `get_thread` | Every message in a conversation, as plain text, with each message's id and attached files |
+| `get_attachment` | Reads a file on a message: text for PDFs and text files, a saved copy's path for anything else |
+| `draft_reply` | Saves a reply as a Gmail draft, with files from your Mac if asked, and opens it in Nook for you to review. Returns its `draft_id` |
+| `compose_draft` | The same for a new message |
+| `list_drafts` | Your drafts, from Gmail: recipients, subject, a preview and the attached files |
+| `get_draft` | One draft's full text and files, including your own edits once you've saved them |
+| `update_draft` | Changes a draft in place (text, recipients, subject, files added or removed), so edits never pile up duplicate drafts |
+| `delete_draft` | Deletes a draft the assistant made. Any other draft needs your yes in the conversation first |
 
-**What it can't do:** send mail, delete anything, or reach the network. The server talks only to the client that launched it, over stdio. Drafts open in Nook (through `nook://` links), and nothing goes out until you press Send. Turning the setting off takes effect on the next tool call. Keep in mind that whatever your assistant reads, it sends to its own model provider, so connect only assistants you trust with your mail.
+**What it can't do:** send mail, or delete anything except drafts. The server talks only to the client that launched it, over stdio, and reaches the network for two things: `get_attachment` downloads a file from Gmail when Nook hasn't stored it yet, and the draft tools read and write your Gmail drafts. Files they attach come from paths the assistant gives, so it can attach any file you can read; you see every file in Nook before anything is sent. Files it can't return as text are copied, unencrypted, to `~/Library/Caches/Nook/mcp-attachments` for a day, readable only by you. Drafts open in Nook (through `nook://` links), and nothing goes out until you press Send. If you're already writing a message, Nook leaves it alone and the draft waits in Drafts. Turning the setting off takes effect on the next tool call. Keep in mind that whatever your assistant reads, it sends to its own model provider, so connect only assistants you trust with your mail.
 
 ## Troubleshooting
 
@@ -254,7 +259,7 @@ Tests/
 
 **Syncing in the background.** Nook syncs whenever it's running, whether or not it's in front, and keeps running when you close its window (click the Dock icon to bring it back; ⌘Q quits). It holds an activity assertion so App Nap doesn't delay the 30-second sync while it's hidden. Turn on **Settings → General → Open Nook at login** so it starts with your Mac. The Dock icon can show your unread inbox count (also in General).
 
-**How sync works.** The first sync downloads your inbox plus the last 60 days of mail and stores Gmail's `historyId`. Every 30 seconds after that, and whenever the app becomes active, Nook asks Gmail only for the history since that cursor and applies new messages, deletions and label changes. If the cursor expires, Nook falls back to a full resync that refreshes labels without downloading bodies again. Actions such as archive, star and read are applied locally first, so the UI never waits on the network, then sent to Gmail. If a Gmail call fails, Nook resyncs.
+**How sync works.** The first sync downloads your inbox plus the last 60 days of mail and stores Gmail's `historyId`. Older mail, if Settings asks for it, is listed with a Gmail search (`newer_than:3y`, say, or everything but spam and trash), and whatever isn't stored yet downloads newest first; stopping part way loses nothing. Every 30 seconds after that, and whenever the app becomes active, Nook asks Gmail only for the history since that cursor and applies new messages, deletions and label changes. If the cursor expires, Nook falls back to a full resync that refreshes labels without downloading bodies again. Actions such as archive, star and read are applied locally first, so the UI never waits on the network, then sent to Gmail. If a Gmail call fails, Nook resyncs.
 
 **How it stays fast.** Every switch and action has a 100 ms budget, enforced by `PerformanceTests` on a 10,000-message mailbox. Lists and counts read a small per-conversation index (`threads`, `thread_tags`) that's updated on every write, instead of scanning messages. Message bodies live in their own table and are read only when you open a conversation. The list loads 100 conversations at a time. The UI reads through a separate read-only SQLite connection, so a running sync never blocks it.
 
@@ -273,10 +278,11 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
 | Senders' profile photos | `~/Library/Caches/com.devenbhooshan.nook/Avatars`, downloaded once from Google, files named by a hash of the address |
 | Company logos (off by default) | Same folder. With **Settings → Privacy → Show company logos** on, Nook looks up each sender's domain in DNS (BIMI) and downloads its logo from the company's own server |
+| Attachment files | Inside the encrypted store, up to the limit in Settings → Privacy (50 GB by default) |
 | Attachments you open, preview or drag | A temporary folder (`$TMPDIR/Nook Attachments`) only you can read, emptied when Nook starts and quits. Files you save go where you save them |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
-| MCP | No network at all: stdio to the client that launches `nook-mcp` |
+| MCP | Stdio to the client that launches `nook-mcp`. It reaches Gmail only for `get_attachment` (a file Nook hasn't stored yet) and the draft tools |
 
 ## Development
 

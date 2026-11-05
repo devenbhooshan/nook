@@ -58,6 +58,10 @@ enum DemoData {
         }
     }
 
+    private static func segmentedControl(in view: NSView) -> NSSegmentedControl? {
+        (view as? NSSegmentedControl) ?? view.subviews.lazy.compactMap(segmentedControl(in:)).first
+    }
+
     /// Clicks at a point measured in points from the top left of the window (its sheet, when one is open).
     private static func click(at point: CGPoint, in store: AppStore) {
         guard let main = store.mainWindow else { return }
@@ -182,6 +186,48 @@ enum DemoData {
         }
         if arguments.contains("--settings-accounts") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { store.openSettings(tab: .accounts) }
+        }
+        if arguments.contains("--settings-privacy") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { store.openSettings(tab: .privacy) }
+        }
+        if let flag = arguments.firstIndex(of: "--settings-segment"), arguments.indices.contains(flag + 1), let segment = Int(arguments[flag + 1]) {
+            // Picks a segment of the Settings window's first segmented control, then reports the attachment limit.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                let settings = NSApp.windows.first { $0.isVisible && $0 !== store.mainWindow && !($0 is NSPanel) }
+                if let control = settings?.contentView.flatMap(segmentedControl(in:)) {
+                    control.selectedSegment = segment
+                    control.sendAction(control.action, to: control.target)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    print("demo: attachmentLimit=\(store.defaults.integer(forKey: AttachmentStorage.limitKey))")
+                    fflush(stdout)
+                }
+            }
+        }
+        if let flag = arguments.firstIndex(of: "--history"), arguments.indices.contains(flag + 1), let years = Int(arguments[flag + 1]) {
+            // What picking "Keep mail from" in Settings → Accounts does, then reports what loaded.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                store.defaults.set(years, forKey: MailHistory.yearsKey)
+                store.loadMailHistoryIfNeeded()
+                print("demo: history started progress=\(store.historyProgress.keys.sorted())")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    let loaded = store.accounts.map { "\($0.email)=\(store.defaults.object(forKey: MailHistory.loadedKey($0.email)) ?? "none")" }
+                    print("demo: history done loaded=\(loaded) progress=\(store.historyProgress)")
+                    fflush(stdout)
+                }
+            }
+        }
+        if let flag = arguments.firstIndex(of: "--paste"), arguments.indices.contains(flag + 1) {
+            // "file:<path>", "image:<path>" or "text:<words>" on a private pasteboard, which ⌘V then reads.
+            let pasteboard = NSPasteboard(name: NSPasteboard.Name("com.devenbhooshan.nook.demo.paste"))
+            pasteboard.clearContents()
+            let parts = arguments[flag + 1].split(separator: ":", maxSplits: 1).map(String.init)
+            switch parts[0] {
+            case "file": pasteboard.writeObjects([URL(fileURLWithPath: parts[1]) as NSURL])
+            case "image": pasteboard.setData(FileManager.default.contents(atPath: parts[1]), forType: .png)
+            default: pasteboard.setString(parts[1], forType: .string)
+            }
+            ComposeView.pasteboard = pasteboard
         }
         if let flag = arguments.firstIndex(of: "--split"), arguments.indices.contains(flag + 1) {
             store.setSplit(.tag(arguments[flag + 1]))
@@ -351,7 +397,17 @@ struct OfflineGmail: GmailService {
     func untrashThread(id: String) async throws {}
     func send(raw: String, threadId: String?) async throws -> String? { threadId }
     func draftID(messageId: String) async throws -> String? { nil }
-    func updateDraft(id: String, raw: String, threadId: String?) async throws {}
+    func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef { GmailDraftRef(id: id, messageId: id) }
+    func drafts() async throws -> [GmailDraftRef] { [] }
+    func deleteDraft(id: String) async throws {}
+    func draft(id: String) async throws -> GmailDraftRef? { nil }
+    func createDraft(raw: String, threadId: String?) async throws -> GmailDraftRef {
+        let message = MIMEParser.decodeBase64URL(raw).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        let files = message.components(separatedBy: "Content-Disposition: attachment").count - 1
+        print("demo: draft-created thread=\(threadId ?? "none") bytes=\(raw.utf8.count) files=\(files)")
+        fflush(stdout)
+        return GmailDraftRef(id: "demo-draft", messageId: "demo-draft-message", threadId: threadId)
+    }
     func sendDraft(id: String) async throws -> String? { nil }
     func attachment(messageId: String, attachmentId: String) async throws -> Data {
         guard let data = DemoAttachments.data(for: attachmentId) else { throw GmailError.notFound }
