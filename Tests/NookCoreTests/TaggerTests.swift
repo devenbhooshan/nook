@@ -191,15 +191,54 @@ struct OllamaStatusTests {
         #expect(OllamaStatus.ready("qwen3").setupCommands(model: "qwen3") == nil)
     }
 
-    @Test func leavesOldMailForHandTagging() async throws {
+    @Test func tagsRecentMailFirstThenOlderMail() async throws {
         let repo = try makeRepository()
-        try repo.upsert([.fixture(id: "old", subject: "Your receipt")])
-        var recent = MailMessage.fixture(id: "new", subject: "Your receipt")
+        try repo.upsert([.fixture(id: "old", subject: "Old receipt")])
+        var recent = MailMessage.fixture(id: "new", subject: "New receipt")
         recent.date = Date().addingTimeInterval(-86_400)
         try repo.upsert([recent])
-        let model = ScriptedModel { _ in "Receipt" }
-        await Tagger(repo: repo, modelProvider: { model }).run()
-        #expect(repo.tags(account: "me@example.com", messageId: "new") == ["Receipt"])
-        #expect(repo.tags(account: "me@example.com", messageId: "old").isEmpty)
+        let order = Order()
+        let model = ScriptedModel { prompt in
+            order.append(prompt.contains("New receipt") ? "new" : "old")
+            return "Receipt"
+        }
+        await Tagger(repo: repo, backlogPause: .zero, modelProvider: { model }).run()
+        #expect(order.items == ["new", "old"])
+        #expect(repo.tags(account: "me@example.com", messageId: "old") == ["Receipt"])
+        #expect(repo.untaggedCount() == 0)
     }
+
+    @Test func newMailDoesntWaitForOlderMail() async throws {
+        let repo = try makeRepository()
+        try repo.upsert([.fixture(id: "old1", subject: "Old one"), .fixture(id: "old2", subject: "Old two")])
+        let order = Order()
+        let model = ScriptedModel { prompt in
+            order.append(prompt.contains("New mail") ? "new" : "old")
+            return "Receipt"
+        }
+        // A long pause after each older message: new mail must cut in rather than wait it out.
+        let tagger = Tagger(repo: repo, batchSize: 1, backlogPause: .seconds(30), modelProvider: { model })
+        let first = Task { await tagger.run() }
+        while order.items.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+
+        var fresh = MailMessage.fixture(id: "new", subject: "New mail")
+        fresh.date = Date()
+        try repo.upsert([fresh])
+        let started = ContinuousClock.now
+        await tagger.run()
+        while !repo.tags(account: "me@example.com", messageId: "new").contains("Receipt") {
+            try await Task.sleep(for: .milliseconds(5))
+            #expect(ContinuousClock.now - started < .seconds(2))
+            if ContinuousClock.now - started > .seconds(2) { break }
+        }
+        #expect(order.items.prefix(2) == ["old", "new"])
+        first.cancel()
+    }
+}
+
+private final class Order: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+    var items: [String] { lock.withLock { values } }
+    func append(_ value: String) { lock.withLock { values.append(value) } }
 }

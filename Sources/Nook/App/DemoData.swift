@@ -124,6 +124,12 @@ enum DemoData {
             settings.cacheDisplay(in: settings.bounds, to: picture)
             try? picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-settings.png")))
         }
+        // And a popover, such as an event's details.
+        if let popover = NSApp.windows.first(where: { $0.isVisible && "\(type(of: $0))".contains("Popover") })?.contentView?.superview,
+           let picture = popover.bitmapImageRepForCachingDisplay(in: popover.bounds) {
+            popover.cacheDisplay(in: popover.bounds, to: picture)
+            try? picture.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-popover.png")))
+        }
         print("demo: alerts=\(ReminderAlerts.shared.visiblePanels.count)")
         print("demo: snapshot=\(path)")
         fflush(stdout)
@@ -549,19 +555,28 @@ private struct DemoCalendar: CalendarSource {
         var id = 0
         func event(
             _ title: String, _ day: Int, _ from: Double, _ to: Double, join: URL? = nil, location: String? = nil,
-            color: String = work, response: CalendarEvent.Response? = .accepted, allDay: Bool = false
+            color: String = work, response: CalendarEvent.Response? = .accepted, allDay: Bool = false,
+            notes: String? = nil, guests: [CalendarEvent.Person] = []
         ) -> CalendarEvent {
             id += 1
             return CalendarEvent(
                 id: "\(account)/demo/\(id)", account: account, calendarName: color == work ? "Work" : "Personal", title: title,
                 start: allDay ? at(day, 0) : at(day, from), end: allDay ? at(day + Int(to), 0) : at(day, to), isAllDay: allDay,
-                location: location, joinURL: join, link: URL(string: "https://calendar.google.com/calendar/r"), color: color, response: response
+                location: location, joinURL: join, link: URL(string: "https://www.google.com/calendar/event?eid=demo\(id)"), color: color, response: response,
+                notes: notes, organizer: guests.first { $0.isOrganizer }, guests: guests
             )
         }
         return [
             event("Priya out of office", 0, 0, 1, color: personal, allDay: true),
             event("Standup", 0, 9.5, 9.75, join: meet),
-            event("Design review: Reader v3", 0, 11, 12, join: meet),
+            event("Design review: Reader v3", 0, 11, 12, join: meet,
+                  notes: "Walk through the new reader.\n\n1. Folded quotes\n2. Attachments strip\n\nDeck: https://docs.example.com/reader-v3",
+                  guests: [
+                    CalendarEvent.Person(email: "priya@acme.dev", name: "Priya Shah", response: .accepted, isOrganizer: true),
+                    CalendarEvent.Person(email: account, response: .accepted, isYou: true),
+                    CalendarEvent.Person(email: "jordan@acme.dev", name: "Jordan Lee", response: .tentative),
+                    CalendarEvent.Person(email: "maya@acme.dev", name: "Maya Chen", response: .declined),
+                  ]),
             event("Lunch with Maya", 0, 11.5, 12.5, location: "Tartine, Valencia St", color: personal),
             event("1:1 with Jordan", 0, 15, 15.5, join: zoom),
             event("Sales sync", 0, 16, 16.5, join: meet, response: .declined),

@@ -18,7 +18,7 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 - **Works with your AI assistant.** Ask Claude "what needs my reply today?" or "draft a reply to Priya saying yes". A built-in, local [MCP](https://modelcontextprotocol.io) server lets Claude Code, Claude Desktop and other MCP clients search and read your mail and its attachments, and open drafts in Nook for you to review. It can't send anything, and it's off until you turn it on.
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Reminders.** Press `h` to be reminded about a conversation at a time you pick or type ("fri 2pm", "3d"): a pop-up that stays until you deal with it, and the conversation at the top of your inbox. When you send, ask to be reminded if nobody replies.
-- **Your calendar, a key away.** Press `t` for today and tomorrow at a glance, with a Join button for the next call, or `g c` for a day view of your Google Calendar, across all your accounts.
+- **Your calendar, a key away.** Press `t` for today and tomorrow at a glance, with a Join button for the next call, or `g c` for your Google Calendar by day, week or month, across all your accounts. Click an event for its details, guests and notes, right in Nook.
 - **Attachments, done properly.** Images and PDFs show a preview under the message. Click for Quick Look, double-click to open, drag to Finder, or save everything to Downloads. Images pasted into an email show where the sender put them. Attach files with `⌘⇧A` or by dropping them on the message, and forwarding keeps the original files.
 - **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
@@ -143,7 +143,9 @@ Reminders live on this Mac, because Gmail has no reminders of its own. They go o
 
 Press `t` anywhere for your agenda: today and tomorrow, with what's on now and what starts in the next few minutes picked out, and a **Join** button for Meet, Zoom, Teams and Webex calls. Any key closes it.
 
-`g c` (or **Calendar** in the sidebar) shows a day of your calendar in place of the mail list: all-day events on top, then the hours, with overlapping meetings side by side and a line at the current time. `←` / `→` (or `j` / `k`) move a day, `t` comes back to today, the week strip jumps to a nearby day, and `esc` goes back to your mail. Click an event to open it in Google Calendar.
+`g c` (or **Calendar** in the sidebar) shows your calendar in place of the mail list, by **Day**, **Week** or **Month** (switch at the top right, or press `d`, `w` or `m`; Nook remembers your choice). The day view lists all-day events on top, then the hours, with overlapping meetings side by side and a line at the current time; the week shows seven days hour by hour; the month shows each day's events in its square. `←` / `→` (or `j` / `k`) move back and forward a day, week or month, `t` comes back to today, clicking a day in the week or month shows it on its own, and `esc` goes back to your mail.
+
+Click an event to see its details in Nook: when it is, which calendar and account it's on, your answer, the guests and theirs, and the description with its links. **Join** starts the call, and **Open in Google Calendar** opens it in your browser as the account it belongs to, rather than whichever Google account the browser happens to have signed in first.
 
 It shows the calendars you have switched on in Google Calendar, for every account, and a meeting on two of your accounts shows once. Nook only reads your calendar; it never changes it. Accounts connected before the calendar arrived show **Sign in again** once, to grant it.
 
@@ -177,7 +179,7 @@ File names are part of the full-text index too, so searching `invoice` finds the
 
 ## Tagging and the split inbox
 
-Each tag has a name and a plain-language description. The model reads the description to decide whether the tag fits, so the descriptions are the "custom model": edit them in **Settings → Tags** to teach Nook what each tag means to you. Tags you add by hand (`l`) are never overwritten. Only mail from the last 60 days is tagged automatically; older mail loaded through **Mail history** stays untagged unless you tag it by hand.
+Each tag has a name and a plain-language description. The model reads the description to decide whether the tag fits, so the descriptions are the "custom model": edit them in **Settings → Tags** to teach Nook what each tag means to you. Tags you add by hand (`l`) are never overwritten. New mail is tagged first, as soon as it arrives. Older mail loaded through **Mail history** is tagged afterwards, newest first, with a short pause between messages so it doesn't slow your Mac; new mail always cuts in ahead of it.
 
 Tags marked **Inbox tab** become tabs across the top of the inbox. By default those are Needs Reply, Newsletter, Receipt and Notification. Conversations that don't fall into any tab show up under **Other**.
 

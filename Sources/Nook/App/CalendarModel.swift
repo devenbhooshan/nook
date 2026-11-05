@@ -26,12 +26,15 @@ final class CalendarModel: ObservableObject {
     func refresh(around day: Date = Date(), force: Bool = false) {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: day)
+        // Enough around the day for the month it's in, shown as up to six weeks.
+        guard let needStart = calendar.date(byAdding: .day, value: -37, to: today),
+              let needEnd = calendar.date(byAdding: .day, value: 42, to: today) else { return }
         if !force, let range, let fetchedAt, Date().timeIntervalSince(fetchedAt) < Self.freshFor,
-           range.start <= today, let weekOut = calendar.date(byAdding: .day, value: 7, to: today), range.end >= weekOut {
+           range.start <= needStart, range.end >= needEnd {
             return
         }
-        guard let start = calendar.date(byAdding: .day, value: -7, to: today),
-              let end = calendar.date(byAdding: .day, value: 28, to: today) else { return }
+        guard let start = calendar.date(byAdding: .day, value: -42, to: today),
+              let end = calendar.date(byAdding: .day, value: 56, to: today) else { return }
         let sources = makeSources()
         generation += 1
         let current = generation

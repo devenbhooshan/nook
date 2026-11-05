@@ -157,17 +157,20 @@ public actor Tagger {
     private let batchSize: Int
     private var isRunning = false
     private var needsAnotherPass = false
+    private var backlog: Task<BacklogOutcome, Never>?
 
     public init(
         repo: MailRepository,
         batchSize: Int = 10,
         recentDays: Int? = Tagger.recentDays,
+        backlogPause: Duration = .milliseconds(750),
         modelProvider: @escaping ModelProvider,
         onUpdate: @escaping @Sendable (TaggerStatus) -> Void = { _ in }
     ) {
         self.repo = repo
         self.batchSize = batchSize
         self.recentDays = recentDays
+        self.backlogPause = backlogPause
         self.modelProvider = modelProvider
         self.onUpdate = onUpdate
     }
@@ -176,6 +179,8 @@ public actor Tagger {
     public func run() async {
         if isRunning {
             needsAnotherPass = true
+            // New mail never waits behind older mail: stop the backlog mid-message and start over, recent first.
+            backlog?.cancel()
             return
         }
         isRunning = true
@@ -186,49 +191,96 @@ public actor Tagger {
         } while needsAnotherPass
     }
 
-    /// Only recent mail is tagged automatically. Older mail loaded from history stays untagged
-    /// (tag it by hand), which keeps the model from working through years of mail.
+    /// Recent mail is tagged first, at full speed. Older mail (loaded through Mail history) is tagged after it,
+    /// newest first, with a pause between messages so years of mail never hog the Mac. New mail jumps the queue.
     public static let recentDays = 60
     private let recentDays: Int?
+    private let backlogPause: Duration
     private var cutoff: Date? { recentDays.map { Date().addingTimeInterval(-Double($0) * 86_400) } }
 
     private func drain() async {
         let tags = repo.tags()
         guard !tags.isEmpty else { return }
         guard let model = await modelProvider() else {
-            onUpdate(TaggerStatus(pending: repo.untaggedCount(since: cutoff), lastError: "No on-device model available"))
+            onUpdate(TaggerStatus(pending: repo.untaggedCount(), lastError: "No on-device model available"))
             return
         }
 
+        // Recent mail goes first, before anything slow such as counting years of older mail.
         var status = TaggerStatus(isRunning: true, modelName: model.displayName, pending: repo.untaggedCount(since: cutoff))
         onUpdate(status)
-
         while !Task.isCancelled {
             let batch = repo.untaggedMessages(limit: batchSize, since: cutoff)
             if batch.isEmpty { break }
-
-            for message in batch {
-                do {
-                    let allowed = TagPrompt.allowedTags(for: message, tags: tags)
-                    let response = try await model.complete(system: TagPrompt.system(tags: allowed), prompt: TagPrompt.prompt(for: message, tags: allowed))
-                    try repo.setAutoTags(TagPrompt.parse(response, allowed: allowed), account: message.account, messageId: message.id)
-                } catch is TagModelSkip {
-                    try? repo.setAutoTags([], account: message.account, messageId: message.id)
-                } catch {
-                    // The model is unreachable or broken. Stop, and try again after the next sync.
-                    status.isRunning = false
-                    status.lastError = error.localizedDescription
-                    status.pending = repo.untaggedCount(since: cutoff)
-                    onUpdate(status)
-                    return
-                }
-            }
+            if let error = await tag(batch, model: model, tags: tags) { return stop(&status, error) }
             status.pending = repo.untaggedCount(since: cutoff)
             onUpdate(status)
         }
 
+        // Older mail, slowly, in a task that new mail can cancel at any moment. Counted once per pass.
+        if cutoff != nil, !needsAnotherPass, !Task.isCancelled {
+            status.pending = repo.untaggedCount()
+            let work = Task { await tagOlderMail(model: model, tags: tags, status: status) }
+            backlog = work
+            let outcome = await work.value
+            backlog = nil
+            switch outcome {
+            case let .failed(error, latest): status = latest; return stop(&status, error)
+            case let .done(latest): status = latest
+            }
+        }
+
         status.isRunning = false
-        status.pending = repo.untaggedCount(since: cutoff)
+        status.pending = repo.untaggedCount()
+        onUpdate(status)
+    }
+
+    private enum BacklogOutcome { case done(TaggerStatus), failed(Error, TaggerStatus) }
+
+    private func tagOlderMail(model: TagModel, tags: [Tag], status: TaggerStatus) async -> BacklogOutcome {
+        var status = status
+        var tagged = 0
+        while !Task.isCancelled {
+            let batch = repo.untaggedMessages(limit: batchSize)
+            if batch.isEmpty { break }
+            for message in batch {
+                if Task.isCancelled { return .done(status) }
+                if let error = await tag([message], model: model, tags: tags) {
+                    // Cancelled because new mail arrived: not a failure. The message stays untagged for later.
+                    return Task.isCancelled ? .done(status) : .failed(error, status)
+                }
+                tagged += 1
+                status.pending = max(status.pending - 1, 0)
+                if tagged % 25 == 0 { onUpdate(status) }
+                if backlogPause > .zero {
+                    do { try await Task.sleep(for: backlogPause) } catch { return .done(status) }
+                }
+            }
+        }
+        return .done(status)
+    }
+
+    /// Tags each message. Returns the error that stopped it, if the model is unreachable or broken.
+    private func tag(_ messages: [MailMessage], model: TagModel, tags: [Tag]) async -> Error? {
+        for message in messages {
+            do {
+                let allowed = TagPrompt.allowedTags(for: message, tags: tags)
+                let response = try await model.complete(system: TagPrompt.system(tags: allowed), prompt: TagPrompt.prompt(for: message, tags: allowed))
+                try repo.setAutoTags(TagPrompt.parse(response, allowed: allowed), account: message.account, messageId: message.id)
+            } catch is TagModelSkip {
+                try? repo.setAutoTags([], account: message.account, messageId: message.id)
+            } catch {
+                return error
+            }
+        }
+        return nil
+    }
+
+    /// Stops for now; tagging tries again after the next sync.
+    private func stop(_ status: inout TaggerStatus, _ error: Error) {
+        status.isRunning = false
+        status.lastError = error.localizedDescription
+        status.pending = repo.untaggedCount()
         onUpdate(status)
     }
 }

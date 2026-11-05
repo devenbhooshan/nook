@@ -118,12 +118,16 @@ final class KeyRouter {
             return true
         }
 
-        // In the calendar: arrows and j/k change the day, t comes back to today, Esc goes back to mail.
+        // In the calendar: arrows and j/k go back and forward a day, week or month, t comes back to today,
+        // d, w and m pick the view, Esc goes back to mail.
         if store.showCalendar, !interpreter.isAwaitingSequence {
             switch (event.keyCode, characters) {
-            case (123, _), (_, "k"), (_, "p"): store.moveCalendarDay(by: -1); return true
-            case (124, _), (_, "j"), (_, "n"): store.moveCalendarDay(by: 1); return true
+            case (123, _), (_, "k"), (_, "p"): store.moveCalendar(by: -1); return true
+            case (124, _), (_, "j"), (_, "n"): store.moveCalendar(by: 1); return true
             case (_, "t"): store.showCalendarToday(); return true
+            case (_, "d"): store.calendarScope = .day; return true
+            case (_, "w"): store.calendarScope = .week; return true
+            case (_, "m"): store.calendarScope = .month; return true
             case (ShortcutInterpreter.KeyCode.escape, _): store.closeCalendar(); return true
             default: break
             }

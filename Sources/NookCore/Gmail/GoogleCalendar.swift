@@ -26,11 +26,43 @@ public struct CalendarEvent: Identifiable, Hashable, Sendable {
     public var color: String?
     /// Your answer, when you're invited rather than the organizer.
     public var response: Response?
+    /// The event's description, as plain text.
+    public var notes: String?
+    public var organizer: Person?
+    public var guests: [Person]
+
+    public struct Person: Hashable, Sendable {
+        public var email: String
+        public var name: String?
+        public var response: Response?
+        public var isOrganizer: Bool
+        public var isYou: Bool
+
+        public init(email: String, name: String? = nil, response: Response? = nil, isOrganizer: Bool = false, isYou: Bool = false) {
+            self.email = email
+            self.name = name
+            self.response = response
+            self.isOrganizer = isOrganizer
+            self.isYou = isYou
+        }
+
+        public var displayName: String { name?.nilIfEmpty ?? email }
+    }
+
+    /// The event in Google Calendar, opened as the account it belongs to. Without `authuser`, Google opens it
+    /// in whichever account the browser signed in first, which often can't see it.
+    public var googleCalendarURL: URL? {
+        guard let link, var components = URLComponents(url: link, resolvingAgainstBaseURL: false) else { return nil }
+        var items = (components.queryItems ?? []).filter { $0.name != "authuser" }
+        items.append(URLQueryItem(name: "authuser", value: account))
+        components.queryItems = items
+        return components.url
+    }
 
     public init(
         id: String, iCalUID: String? = nil, account: String, calendarName: String = "", title: String, start: Date, end: Date,
         isAllDay: Bool = false, location: String? = nil, joinURL: URL? = nil, link: URL? = nil, color: String? = nil,
-        response: Response? = nil
+        response: Response? = nil, notes: String? = nil, organizer: Person? = nil, guests: [Person] = []
     ) {
         self.id = id
         self.iCalUID = iCalUID
@@ -45,6 +77,9 @@ public struct CalendarEvent: Identifiable, Hashable, Sendable {
         self.link = link
         self.color = color
         self.response = response
+        self.notes = notes
+        self.organizer = organizer
+        self.guests = guests
     }
 
     public var isDeclined: Bool { response == .declined }
@@ -169,9 +204,19 @@ public struct GoogleCalendar: CalendarSource {
             var dateTime: String?
         }
         struct Attendee: Decodable {
+            var email: String?
+            var displayName: String?
             var isSelf: Bool?
+            var organizer: Bool?
+            var resource: Bool?
             var responseStatus: String?
-            enum CodingKeys: String, CodingKey { case isSelf = "self", responseStatus }
+            enum CodingKeys: String, CodingKey { case email, displayName, isSelf = "self", organizer, resource, responseStatus }
+        }
+        struct Organizer: Decodable {
+            var email: String?
+            var displayName: String?
+            var isSelf: Bool?
+            enum CodingKeys: String, CodingKey { case email, displayName, isSelf = "self" }
         }
         struct Conference: Decodable {
             struct EntryPoint: Decodable {
@@ -192,6 +237,7 @@ public struct GoogleCalendar: CalendarSource {
         var conferenceData: Conference?
         var htmlLink: String?
         var attendees: [Attendee]?
+        var organizer: Organizer?
         var eventType: String?
     }
 
@@ -210,8 +256,30 @@ public struct GoogleCalendar: CalendarSource {
             start: start, end: max(end, start), isAllDay: allDay,
             location: event.location?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             joinURL: join, link: event.htmlLink.flatMap(URL.init(string:)), color: calendar.backgroundColor,
-            response: event.attendees?.first { $0.isSelf == true }?.responseStatus.flatMap(CalendarEvent.Response.init(rawValue:))
+            response: event.attendees?.first { $0.isSelf == true }?.responseStatus.flatMap(CalendarEvent.Response.init(rawValue:)),
+            notes: notes(event.description),
+            organizer: event.organizer.flatMap { organizer in
+                organizer.email.map { CalendarEvent.Person(email: $0, name: organizer.displayName, isOrganizer: true, isYou: organizer.isSelf == true) }
+            },
+            // Rooms are listed as attendees too; they aren't people.
+            guests: (event.attendees ?? []).filter { $0.resource != true }.compactMap { attendee in
+                attendee.email.map {
+                    CalendarEvent.Person(
+                        email: $0, name: attendee.displayName,
+                        response: attendee.responseStatus.flatMap(CalendarEvent.Response.init(rawValue:)),
+                        isOrganizer: attendee.organizer == true, isYou: attendee.isSelf == true
+                    )
+                }
+            }
         )
+    }
+
+    /// Google keeps descriptions as HTML when they were written in its editor, and as plain text otherwise.
+    static func notes(_ description: String?) -> String? {
+        guard let description = description?.trimmingCharacters(in: .whitespacesAndNewlines), !description.isEmpty else { return nil }
+        let looksLikeHTML = description.range(of: "<[a-zA-Z/][^>]*>", options: .regularExpression) != nil
+        let text = looksLikeHTML ? MIMEParser.plainText(fromHTML: description) : description
+        return text.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
     }
 
     /// A timed event's instant, or an all-day event's local midnight.

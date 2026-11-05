@@ -59,6 +59,41 @@ struct GoogleCalendarTests {
         #expect(urls.count == 4)
     }
 
+    @Test func readsAnEventsDetails() async throws {
+        let (client, _) = calendar([
+            .init(200, #"{"items": [{"id": "me@example.com", "summary": "Me", "primary": true}]}"#),
+            .init(200, """
+            {"items": [{"id": "e1", "summary": "Kickoff", "start": {"dateTime": "2026-10-21T10:00:00Z"}, "end": {"dateTime": "2026-10-21T11:00:00Z"},
+              "htmlLink": "https://www.google.com/calendar/event?eid=abc",
+              "description": "Agenda:<br>1. Goals<br><a href=\\"https://docs.example.com/plan\\">plan</a>",
+              "organizer": {"email": "ann@example.com", "displayName": "Ann"},
+              "attendees": [
+                {"email": "ann@example.com", "displayName": "Ann", "organizer": true, "responseStatus": "accepted"},
+                {"email": "me@example.com", "self": true, "responseStatus": "needsAction"},
+                {"email": "room@resource.calendar.google.com", "resource": true, "responseStatus": "accepted"}
+              ]}]}
+            """),
+        ])
+        let event = try #require(try await client.events(from: Date(timeIntervalSince1970: 1_792_000_000), to: Date(timeIntervalSince1970: 1_793_000_000)).first)
+        #expect(event.organizer?.displayName == "Ann")
+        #expect(event.guests.map(\.email) == ["ann@example.com", "me@example.com"])
+        #expect(event.guests[0].isOrganizer && event.guests[0].response == .accepted)
+        #expect(event.guests[1].isYou && event.guests[1].response == .needsAction)
+        let notes = try #require(event.notes)
+        #expect(notes.contains("Agenda:") && notes.contains("1. Goals") && !notes.contains("<br>"))
+
+        // Opens as the account the event belongs to, not whichever one the browser signed in first.
+        let url = try #require(event.googleCalendarURL)
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        #expect(items.contains(URLQueryItem(name: "eid", value: "abc")))
+        #expect(items.contains(URLQueryItem(name: "authuser", value: "me@example.com")))
+    }
+
+    @Test func keepsPlainTextDescriptionsAsTheyAre() {
+        #expect(GoogleCalendar.notes("Bring the deck\nRoom 4 < 5") == "Bring the deck\nRoom 4 < 5")
+        #expect(GoogleCalendar.notes("  ") == nil)
+    }
+
     @Test func tellsAMissingPermissionAndASwitchedOffAPIApart() async {
         let scope = #"{"error": {"code": 403, "message": "Request had insufficient authentication scopes.", "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#
         let disabled = #"{"error": {"code": 403, "message": "Google Calendar API has not been used in project 1 before or it is disabled.", "details": [{"reason": "SERVICE_DISABLED", "metadata": {"activationUrl": "https://console.developers.google.com/apis/api/calendar-json.googleapis.com/overview?project=1"}}]}}"#

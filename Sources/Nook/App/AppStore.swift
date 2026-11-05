@@ -93,6 +93,10 @@ final class AppStore: ObservableObject {
     @Published private(set) var showCalendar = false
     /// The day the calendar view shows.
     @Published private(set) var calendarDay = Calendar.current.startOfDay(for: Date())
+    /// Day, week or month. Remembered between launches.
+    @Published var calendarScope: CalendarScope = .day {
+        didSet { defaults.set(calendarScope.rawValue, forKey: "ui.calendarScope") }
+    }
     /// The quick agenda (t) is open over whatever's on screen.
     @Published var showAgenda = false
     @Published var draft: Draft?
@@ -187,6 +191,7 @@ final class AppStore: ObservableObject {
         let defaults = defaults
         showSidebar = defaults.bool(forKey: "ui.showSidebar")
         unreadOnly = defaults.bool(forKey: "ui.unreadOnly")
+        calendarScope = defaults.string(forKey: "ui.calendarScope").flatMap(CalendarScope.init(rawValue:)) ?? .day
 
         let notify: @Sendable () -> Void = {
             Task { @MainActor in NotificationCenter.default.post(name: .nookDataChanged, object: nil) }
@@ -1063,6 +1068,25 @@ final class AppStore: ObservableObject {
         calendar.refresh(around: day)
     }
 
+    /// The previous or next day, week or month, whichever is showing.
+    func moveCalendar(by steps: Int) {
+        let unit: Calendar.Component = switch calendarScope {
+        case .day: .day
+        case .week: .weekOfYear
+        case .month: .month
+        }
+        guard let day = Calendar.current.date(byAdding: unit, value: steps, to: calendarDay) else { return }
+        calendarDay = Calendar.current.startOfDay(for: day)
+        calendar.refresh(around: calendarDay)
+    }
+
+    /// A day picked in the week or month: show it on its own.
+    func showCalendarDay(_ day: Date) {
+        calendarDay = Calendar.current.startOfDay(for: day)
+        calendarScope = .day
+        calendar.refresh(around: calendarDay)
+    }
+
     func showCalendarToday() {
         calendarDay = Calendar.current.startOfDay(for: Date())
         calendar.refresh(around: calendarDay)
@@ -1580,5 +1604,17 @@ final class AppStore: ObservableObject {
             PaletteCommand(title: "Show \(tag.name)", section: "Tags", systemImage: "tag", shortcut: nil) { [weak self] in self?.setSplit(.tag(tag.name)) }
         }
         return commands
+    }
+}
+
+enum CalendarScope: String, CaseIterable, Identifiable {
+    case day, week, month
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .day: "Day"
+        case .week: "Week"
+        case .month: "Month"
+        }
     }
 }
