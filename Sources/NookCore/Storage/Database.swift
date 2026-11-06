@@ -122,6 +122,17 @@ public final class Database: @unchecked Sendable {
         for suffix in ["-wal", "-shm"] { try? fileManager.removeItem(atPath: path + suffix) }
     }
 
+    /// Closes the store for good as the app quits, and keeps every other thread out of it from then on.
+    ///
+    /// Quitting runs SQLCipher's own shutdown, which frees its memory. A background task still reading or writing
+    /// at that moment would crash the app on its way out. Taking the lock waits for the statement in flight to finish;
+    /// never giving it back leaves anything else that reaches for the store waiting until the process is gone.
+    public func closeForQuit() {
+        lock.lock()
+        sqlite3_close_v2(handle)
+        handle = nil
+    }
+
     /// Runs one or more statements that take no arguments.
     public func run(_ sql: String) throws {
         lock.lock(); defer { lock.unlock() }

@@ -168,4 +168,25 @@ struct HardeningTests {
         #expect(try reopened.db.query("SELECT name FROM sqlite_master WHERE name = 'rules'").isEmpty)
         #expect(reopened.threads(ThreadQuery()).first?.subject == "Still here")
     }
+
+    /// Quitting frees SQLCipher's memory; a background write at that moment crashed the app on its way out.
+    @Test func aQueryAfterQuitWaitsInsteadOfTouchingTheClosedStore() async throws {
+        let db = try Database(path: ":memory:")
+        try db.run("CREATE TABLE t (x INTEGER)")
+        db.closeForQuit()
+        let finished = ManagedAtomicFlag()
+        Thread.detachNewThread {
+            _ = try? db.query("SELECT x FROM t")
+            finished.set()
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!finished.isSet)
+    }
+}
+
+private final class ManagedAtomicFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
 }

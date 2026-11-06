@@ -49,6 +49,12 @@ public final class MailRepository: @unchecked Sendable {
     /// waits behind a sync's write transaction; the same connection in tests and for in-memory stores.
     private let reader: Database
 
+    /// See `Database.closeForQuit()`.
+    public func closeForQuit() {
+        reader.closeForQuit()
+        db.closeForQuit()
+    }
+
     public init(db: Database, reader: Database? = nil) {
         self.db = db
         self.reader = reader ?? db

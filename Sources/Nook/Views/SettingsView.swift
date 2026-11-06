@@ -165,8 +165,14 @@ private struct MailHistorySection: View {
             .onChange(of: years) { _, _ in store.loadMailHistoryIfNeeded() }
             ForEach(store.accounts.filter { store.historyProgress[$0.email] != nil }) { account in
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Loading older mail for \(account.email)…").font(.caption).foregroundStyle(.secondary)
-                    ProgressView(value: store.historyProgress[account.email] ?? 0)
+                    let progress = store.historyProgress[account.email] ?? 0
+                    if progress < 0 {
+                        Text("Finding older mail for \(account.email)…").font(.caption).foregroundStyle(.secondary)
+                        ProgressView().progressViewStyle(.linear)
+                    } else {
+                        Text("Loading older mail for \(account.email)…").font(.caption).foregroundStyle(.secondary)
+                        ProgressView(value: progress)
+                    }
                 }
             }
         } header: {

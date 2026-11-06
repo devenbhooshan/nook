@@ -65,8 +65,22 @@ struct SyncEngineTests {
         #expect(added == 2)
         #expect(repo.messageIds(account: account) == ["1", "2", "3"])
         #expect(await gmail.fullFetches.count == 2, "what was stored isn't fetched again")
-        #expect(progress.entries.last?.0 == 2 && progress.entries.last?.1 == 2, "finishes at 2 of 2")
+        #expect(progress.entries.first?.0 == 1 && progress.entries.first?.1 == 3, "starts with what's already here")
+        #expect(progress.entries.last?.0 == 3 && progress.entries.last?.1 == 3, "finishes at 3 of 3")
         #expect(try await engine.loadOlderMail(account: account, query: "-in:spam -in:trash") == 0)
+    }
+
+    @Test func olderMailWaitsOutGmailsRateLimitAndCarriesOn() async throws {
+        await engine.configure(initialLimit: 1)
+        try await engine.sync(account)
+        await engine.setBackfillPause(.milliseconds(50))
+        await gmail.resetCounters()
+        await gmail.rateLimit(after: 1)
+        let load = Task { try await engine.loadOlderMail(account: account, query: "-in:spam -in:trash") }
+        try await Task.sleep(for: .milliseconds(120))
+        await gmail.rateLimit(after: nil)
+        #expect(try await load.value >= 1)
+        #expect(repo.messageIds(account: account) == ["1", "2", "3"])
     }
 
     @Test func historyChoices() {

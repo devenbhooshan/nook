@@ -139,20 +139,51 @@ public actor SyncEngine {
         if let task = backfills[account] { return try await task.value }
         let task = Task { () throws -> Int in
             let service = try self.service(for: account)
+            let listed = try await self.patiently { try await service.listMessageIDs(query: query, limit: MailHistory.largestListing) }
             let known = repo.messageIds(account: account)
-            let ids = try await service.listMessageIDs(query: query, limit: MailHistory.largestListing).filter { !known.contains($0) }
-            progress(0, ids.count)
+            let ids = listed.filter { !known.contains($0) }
+            // Count what's already here, so the bar shows how much of the mailbox is on this Mac and doesn't start
+            // from nothing each time Nook opens.
+            let here = listed.count - ids.count
+            progress(here, listed.count)
             var added = 0
             // Bigger slices than a sync's batches, so progress is reported without a call per batch.
             for start in stride(from: 0, to: ids.count, by: 200) {
-                added += try await fetchAndStore(Array(ids[start..<min(start + 200, ids.count)]), account: account, service: service)
-                progress(min(start + 200, ids.count), ids.count)
+                let slice = Array(ids[start..<min(start + 200, ids.count)])
+                added += try await self.patiently { try await self.fetchAndStore(slice, account: account, service: service) }
+                progress(here + start + slice.count, listed.count)
             }
             return added
         }
         backfills[account] = task
         defer { backfills[account] = nil }
         return try await task.value
+    }
+
+    /// How long loading older mail waits after Gmail asks it to slow down.
+    var backfillPause: Duration = .seconds(60)
+    func setBackfillPause(_ pause: Duration) { backfillPause = pause }
+
+    /// Loading a whole mailbox runs into Gmail's rate limit now and then. Wait and carry on from the same place,
+    /// instead of giving up and listing the whole mailbox again later.
+    private func patiently<T>(_ work: () async throws -> T) async throws -> T {
+        var failures = 0
+        while true {
+            do {
+                return try await work()
+            } catch let error as GmailError where Self.isTemporary(error) && failures < 30 {
+                failures += 1
+                try await Task.sleep(for: backfillPause)
+            }
+        }
+    }
+
+    static func isTemporary(_ error: GmailError) -> Bool {
+        switch error {
+        case .rateLimited: true
+        case .http(let status, _): status == 403 || status == 429 || status >= 500
+        default: false
+        }
     }
 
     /// Re-reads one conversation's labels from Gmail, so local state matches the server after a change Gmail

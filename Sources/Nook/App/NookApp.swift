@@ -66,6 +66,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Files written for Quick Look and dragging are copies of your mail; don't leave them behind.
     func applicationWillTerminate(_ notification: Notification) {
         AttachmentFiles.clearTemporaryFiles()
+        // Last: background tagging and syncing may still be using the store.
+        AppStore.current?.repo.closeForQuit()
     }
 
     /// A mail app keeps syncing with its window closed. Quit with ⌘Q.

@@ -548,6 +548,17 @@ final class AppStore: ObservableObject {
     func move(by offset: Int) {
         guard !threads.isEmpty else { return }
         let current = (openThread ?? selectedThread).flatMap { thread in threads.firstIndex { $0.id == thread.id } }
+        if openThread != nil, offset > 0 {
+            // In the reader, Next goes to the next conversation still to read. Under "Unread only" that skips what
+            // you've already read here; when nothing is left, the reader closes onto the empty list.
+            let start = (current ?? -1) + 1
+            let rest = start < threads.count ? threads[start...] : []
+            let skipRead = unreadOnly && currentQuery.unreadOnly
+            if let next = rest.first(where: { !skipRead || $0.isUnread }) { return open(next) }
+            closeThread()
+            showToast(skipRead ? "No more unread mail" : "No more conversations", undo: nil)
+            return
+        }
         let target = max(0, min(threads.count - 1, (current ?? -1) + offset))
         if openThread != nil {
             open(threads[target])
@@ -665,7 +676,7 @@ final class AppStore: ObservableObject {
             // After a failure, wait a while instead of listing the whole mailbox again on every sync.
             if let failed = historyFailedAt[email], Date().timeIntervalSince(failed) < 300 { continue }
             historyLoads.insert(email)
-            historyProgress[email] = 0
+            historyProgress[email] = -1  // Still listing the mailbox; how much there is isn't known yet.
             let sync = sync
             Task {
                 do {

@@ -272,10 +272,13 @@ public final class MCPServer {
     }
 
     /// Tool calls run one at a time on a plain thread, so this waits for Gmail.
+    ///
+    /// The work runs on its own queue, not Swift's shared thread pool. When the caller is itself on that pool (tests,
+    /// or a machine with few cores), blocking it could leave no thread for the work, and every call would time out.
     func wait<T>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
         let outcome = Pending<T>()
         let finished = DispatchSemaphore(value: 0)
-        Task.detached {
+        Task(executorPreference: GmailWorkExecutor.shared) {
             do { outcome.result = .success(try await work()) } catch { outcome.result = .failure(error) }
             finished.signal()
         }
@@ -419,3 +422,15 @@ public enum MCPSettings {
 }
 
 private final class Pending<T>: @unchecked Sendable { var result: Result<T, Error>? }
+
+/// Runs `MCPServer.wait`'s work on threads of its own, so it never waits for a thread that the blocked caller holds.
+final class GmailWorkExecutor: TaskExecutor {
+    static let shared = GmailWorkExecutor()
+    private let queue = DispatchQueue(label: "com.devenbhooshan.nook.mcp-gmail", qos: .userInitiated, attributes: .concurrent)
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        let executor = asUnownedTaskExecutor()
+        queue.async { job.runSynchronously(on: executor) }
+    }
+}
