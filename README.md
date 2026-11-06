@@ -9,7 +9,7 @@
   Fast keyboard-driven mail, stored on your Mac and tagged by a model that runs on your Mac.
 </p>
 
-https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
+https://github.com/user-attachments/assets/5bf6c17f-e201-4cdd-ba61-ff62ef6b7c4e
 
 ## Why Nook
 
