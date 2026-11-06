@@ -25,9 +25,11 @@ https://github.com/user-attachments/assets/e89b9840-02cc-4deb-b770-9b332c44e0b2
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them (once, or always for a sender or domain you trust), and JavaScript in email never runs.
 - **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
 
-| Split inbox | Reader | Dark mode | Command palette |
-| --- | --- | --- | --- |
-| ![Split inbox](docs/screenshots/list.png) | ![Reader](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) | ![Command palette](docs/screenshots/palette.png) |
+| Split inbox | Reader with attachments | Dark mode |
+| --- | --- | --- |
+| ![Split inbox](docs/screenshots/list.png) | ![Reader with attachments](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) |
+| **Calendar** | **Reply with a file** | **Command palette** |
+| ![Calendar](docs/screenshots/calendar.png) | ![Reply with a file](docs/screenshots/compose.png) | ![Command palette](docs/screenshots/palette.png) |
 
 ## Download
 
