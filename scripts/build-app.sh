@@ -9,6 +9,10 @@ configuration="release"
 # NOOK_DEV=1 builds a dev copy that times every action (Mail → Copy Diagnostics). Releases never set it.
 dev=()
 [[ "${NOOK_DEV:-}" == "1" ]] && dev=(-Xswiftc -DNOOK_DEV)
+# Extra compiler flags. CI passes the test run's (-enable-testing) so this reuses its release build instead of
+# compiling everything a third time. Never set for builds people run.
+read -r -a extra <<< "${NOOK_SWIFT_FLAGS:-}"
+dev+=(${extra[@]+"${extra[@]}"})
 swift build -c "$configuration" ${dev[@]+"${dev[@]}"}
 bin="$(swift build -c "$configuration" ${dev[@]+"${dev[@]}"} --show-bin-path)"
 

@@ -23,5 +23,8 @@ jobs:
         run: swift --version
       - name: Test
         run: ./scripts/test.sh
+      # The test step already compiled a release build with -enable-testing (for the speed tests). Building the
+      # app with the same flags reuses it; without them, everything compiled a third time. This app is only a
+      # check that packaging works: releases are built by scripts/release.sh, without the flag.
       - name: Build app
-        run: ./scripts/build-app.sh
+        run: NOOK_SWIFT_FLAGS="-Xswiftc -enable-testing" ./scripts/build-app.sh
