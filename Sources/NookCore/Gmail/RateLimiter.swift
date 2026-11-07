@@ -1,5 +1,11 @@
 import Foundation
 
+/// Work nobody is waiting on: loading older mail, downloading attachments ahead of time. It leaves part of the
+/// quota free, so what someone opened (an email's images, a send) isn't queued behind thousands of downloads.
+public enum GmailPriority {
+    @TaskLocal public static var background = false
+}
+
 /// A token bucket that keeps Gmail calls under Google's per-user quota.
 ///
 /// Gmail allows 15,000 quota units per user per minute (250 a second), and each method has a cost:
@@ -33,11 +39,28 @@ public actor RateLimiter {
         self.sleep = sleep
     }
 
-    /// Waits until `cost` units are available, then spends them.
-    public func acquire(_ cost: Int) async {
+    private func refill() {
         let current = now()
         available = min(capacity, available + current.timeIntervalSince(lastRefill) * unitsPerSecond)
         lastRefill = current
+    }
+
+    /// Waits until `cost` units are available, then spends them. Background work waits until spending them would
+    /// still leave `reserve` free for what someone's waiting on.
+    public func acquire(_ cost: Int) async {
+        if GmailPriority.background {
+            let reserve = capacity * 0.4
+            while true {
+                refill()
+                // A little slack, and a floor on the wait: rounding could otherwise leave it a hair short forever,
+                // retrying with waits too small to matter.
+                if available - Double(cost) >= reserve - 0.01 { break }
+                await sleep(max(0.01, (reserve + Double(cost) - available) / unitsPerSecond))
+            }
+            available -= Double(cost)
+            return
+        }
+        refill()
         // Reserve before waiting, so callers that arrive while this one sleeps queue up behind it.
         available -= Double(cost)
         if available < 0 {

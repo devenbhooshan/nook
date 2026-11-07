@@ -13,6 +13,8 @@ struct EmailWebView: NSViewRepresentable {
     /// Supplies images the body links with `cid:`. They're part of the message, not remote content.
     var inlineImage: InlineImageLoader?
 
+    @MainActor static let dataStore = WKWebsiteDataStore.nonPersistent()
+
     func makeCoordinator() -> Coordinator {
         Coordinator(height: $height)
     }
@@ -20,8 +22,12 @@ struct EmailWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        configuration.websiteDataStore = .nonPersistent()
-        configuration.suppressesIncrementalRendering = true
+        // One in-memory store for every message: a fresh one per view started WebKit's storage up again each
+        // time an email opened. Nothing is written to disk either way.
+        configuration.websiteDataStore = Self.dataStore
+        // Show the text as soon as it's parsed. Waiting for the whole load meant a slow image server, or a
+        // tracking pixel that never answers, kept the email blank for seconds.
+        configuration.suppressesIncrementalRendering = false
         context.coordinator.inlineImages.load = inlineImage
         if !WKWebView.handlesURLScheme("cid") {
             configuration.setURLSchemeHandler(context.coordinator.inlineImages, forURLScheme: "cid")
@@ -120,6 +126,9 @@ struct EmailWebView: NSViewRepresentable {
         private var measured = ContentHeight()
         /// Set just before Nook loads a message, so that load is the one navigation the view allows.
         private var allowsNextLoad = false
+        /// Dev builds: how long a body takes to show, from asking WebKit to load it.
+        private var untilShown: Diagnostics.Step?
+        private var untilMeasured: Diagnostics.Step?
 
         init(height: Binding<CGFloat>) {
             _height = height
@@ -130,10 +139,20 @@ struct EmailWebView: NSViewRepresentable {
             loadedHTML = html
             measured = ContentHeight()
             allowsNextLoad = true
+            untilShown?.end()
+            untilShown = Diagnostics.step("email body: until fully loaded, images too (\(html.utf8.count / 1024) KB)")
+            untilMeasured = Diagnostics.step("email body: until text drawn")
             webView.loadHTMLString(html, baseURL: nil)
         }
 
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            untilShown?.end()
+            untilShown = nil
+        }
+
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+            untilMeasured?.end()
+            untilMeasured = nil
             guard let value = message.body as? Double, let newHeight = measured.report(value) else { return }
             height = newHeight
         }
@@ -174,7 +193,9 @@ final class InlineImageHandler: NSObject, WKURLSchemeHandler {
         let contentId = String(url.absoluteString.dropFirst("cid:".count))
         let key = ObjectIdentifier(task)
         Task { @MainActor in
+            let step = Diagnostics.step("email body: inline image")
             let result = await load(contentId.removingPercentEncoding ?? contentId)
+            step?.end()
             // WebKit throws if a stopped task is answered.
             guard stopped.remove(key) == nil else { return }
             guard let result else { return task.didFailWithError(URLError(.fileDoesNotExist)) }

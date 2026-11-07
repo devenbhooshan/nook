@@ -141,4 +141,28 @@ struct PerformanceTests {
         }
         #expect(elapsed < .milliseconds(50 * Self.machineAllowance), "20-message batch took \(elapsed)")
     }
+
+    /// Closing an email froze the app for seconds: the main thread's list query waited behind background reads.
+    @MainActor @Test func theMainThreadNeverWaitsForBackgroundReads() async throws {
+        let repo = repo
+        let busy = ContinuousClock().measure { repo.occupyBackgroundReader() }
+        let started = DispatchSemaphore(value: 0)
+        Thread.detachNewThread { started.signal(); repo.occupyBackgroundReader() }
+        started.wait()
+        try await Task.sleep(for: .milliseconds(20))
+        let elapsed = ContinuousClock().measure { _ = repo.threads(ThreadQuery(limit: 100)) }
+        #expect(elapsed < Self.budget * 2, "list on the main thread took \(elapsed) while a \(busy) background read ran")
+    }
+
+    /// Searches read their rows, tags and reminders on their own connection, so counts or loading older mail on the
+    /// background connection can't hold them up.
+    @Test func searchNeverWaitsForBackgroundReads() async throws {
+        let repo = repo
+        let started = DispatchSemaphore(value: 0)
+        Thread.detachNewThread { started.signal(); repo.occupyBackgroundReader() }
+        started.wait()
+        try await Task.sleep(for: .milliseconds(20))
+        let elapsed = ContinuousClock().measure { _ = repo.threads(ThreadQuery(search: SearchQuery.parse("invoice"), limit: 100)) }
+        #expect(elapsed < Self.searchBudget, "search took \(elapsed) while the background connection was busy")
+    }
 }

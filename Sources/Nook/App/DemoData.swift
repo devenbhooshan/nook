@@ -47,6 +47,7 @@ enum DemoData {
         var flags: NSEvent.ModifierFlags = []
         if parts.contains("cmd") { flags.insert(.command) }
         if parts.contains("shift") { flags.insert(.shift) }
+        if parts.contains("opt") { flags.insert(.option) }
         guard let (code, characters) = codes[key] ?? letters[key].map({ ($0, key) }) else { return }
         for down in [true, false] {
             guard let event = NSEvent.keyEvent(

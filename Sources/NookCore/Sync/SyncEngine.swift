@@ -137,7 +137,7 @@ public actor SyncEngine {
         account: String, query: String, progress: @escaping @Sendable (_ done: Int, _ total: Int) -> Void = { _, _ in }
     ) async throws -> Int {
         if let task = backfills[account] { return try await task.value }
-        let task = Task { () throws -> Int in
+        let task = Task { () throws -> Int in try await GmailPriority.$background.withValue(true) {
             let service = try self.service(for: account)
             let listed = try await self.patiently { try await service.listMessageIDs(query: query, limit: MailHistory.largestListing) }
             let known = repo.messageIds(account: account)
@@ -154,7 +154,7 @@ public actor SyncEngine {
                 progress(here + start + slice.count, listed.count)
             }
             return added
-        }
+        } }
         backfills[account] = task
         defer { backfills[account] = nil }
         return try await task.value
@@ -378,6 +378,10 @@ public actor SyncEngine {
 
     /// Newest mail first. Stops at the first failure and carries on after the next sync.
     private func downloadAttachments(account: String, service: GmailService) async {
+        await GmailPriority.$background.withValue(true) { await downloadAttachmentsNow(account: account, service: service) }
+    }
+
+    private func downloadAttachmentsNow(account: String, service: GmailService) async {
         // The limit may have been lowered since the last run.
         try? repo.trimStoredAttachments(toBudget: attachmentBudget())
         while !Task.isCancelled {

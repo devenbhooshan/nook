@@ -170,6 +170,21 @@ struct RateLimiterTests {
         #expect(sleeps.entries.last?.1 == 1.0)
     }
 
+    /// Loading older mail used the whole quota, so an email's images waited seconds behind it.
+    @Test func backgroundWorkLeavesRoomForWhatYoureWaitingOn() async {
+        let clock = FixedClock()
+        let waits = DelayLog()
+        let limiter = RateLimiter(unitsPerSecond: 100, burst: 250, now: { clock.now }, sleep: { waits.append(0, $0); clock.advance($0) })
+        await GmailPriority.$background.withValue(true) {
+            for _ in 0..<200 { await limiter.acquire(5) }
+        }
+        #expect(!waits.entries.isEmpty, "background work was paced")
+        let before = waits.entries.count
+        await limiter.acquire(5)
+        await limiter.acquire(5)
+        #expect(waits.entries.count == before, "an interactive request didn't wait")
+    }
+
     @Test func costsFollowGmailsQuotaTable() {
         #expect(GmailQuota.cost(method: "GET", path: "messages/abc") == 5)
         #expect(GmailQuota.cost(method: "GET", path: "history") == 2)

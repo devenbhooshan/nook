@@ -27,7 +27,9 @@ enum MessageRenderCache {
     static func document(for message: MailMessage, allowRemoteContent: Bool) -> String {
         let key = "\(message.account)/\(message.id)/\(allowRemoteContent)" as NSString
         if let cached = documents.object(forKey: key) { return cached.value }
+        let step = Diagnostics.step("email body: prepare HTML")
         let document = EmailHTML.document(for: message, allowRemoteContent: allowRemoteContent)
+        step?.end()
         documents.setObject(Box(document), forKey: key)
         return document
     }

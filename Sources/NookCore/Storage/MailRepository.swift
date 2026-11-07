@@ -47,17 +47,59 @@ public final class MailRepository: @unchecked Sendable {
     public let db: Database
     /// Where lists, counts and thread reads go. A separate read-only connection in the app, so the UI never
     /// waits behind a sync's write transaction; the same connection in tests and for in-memory stores.
-    private let reader: Database
+    private let backgroundReader: Database
+    /// The main thread's own read-only connection. Every connection serializes its calls, so a main-thread read
+    /// sharing one with background work (counts, tagging, loading older mail) waited behind it: closing an email
+    /// froze the app for seconds. nil shares `backgroundReader`.
+    private let mainReader: Database?
+    private var reader: Database {
+        if Thread.isMainThread { return mainReader ?? backgroundReader }
+        // Everything a search reads (its rows, tags, reminders) goes through the search connection, so a search
+        // never waits behind counts or loading older mail on the background one.
+        if let searcher, Thread.current.threadDictionary[Self.searchingKey] != nil { return searcher }
+        return backgroundReader
+    }
+    private static let searchingKey = "nook.searching"
+    /// Search's own read-only connection in the app, so a search can be cancelled the moment a newer keystroke
+    /// replaces it without touching anything else. nil shares `reader`, and then searches aren't cancelled.
+    private let searcher: Database?
 
     /// See `Database.closeForQuit()`.
     public func closeForQuit() {
-        reader.closeForQuit()
+        searcher?.closeForQuit()
+        mainReader?.closeForQuit()
+        backgroundReader.closeForQuit()
         db.closeForQuit()
     }
 
-    public init(db: Database, reader: Database? = nil) {
+    /// Tests: keeps the background connection busy for a while, like a long count or a tagging batch.
+    func occupyBackgroundReader() {
+        _ = try? backgroundReader.query("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c LIMIT 4000000) SELECT count(*) AS n FROM c")
+    }
+
+    /// `threads(_:)` for a list someone is waiting to see, read off the main thread: it goes through the search
+    /// connection, so it doesn't queue behind counts, tagging or loading older mail. `cancelSearch()` stops it.
+    public func threadsForDisplay(_ query: ThreadQuery) -> [ThreadSummary] {
+        let marked = Thread.current.threadDictionary[Self.searchingKey] != nil
+        if !marked { Thread.current.threadDictionary[Self.searchingKey] = true }
+        defer { if !marked { Thread.current.threadDictionary[Self.searchingKey] = nil } }
+        return threads(query)
+    }
+
+    /// Stops a search that's still running; it returns no results. Safe from any thread.
+    public func cancelSearch() {
+        searcher?.interrupt()
+    }
+
+    /// Where downloaded attachments are kept, encrypted. nil keeps them inside the store (tests, the demo).
+    public let vault: AttachmentVault?
+
+    public init(db: Database, reader: Database? = nil, mainReader: Database? = nil, searcher: Database? = nil, vault: AttachmentVault? = nil) {
+        self.vault = vault
         self.db = db
-        self.reader = reader ?? db
+        self.backgroundReader = reader ?? db
+        self.mainReader = mainReader
+        self.searcher = searcher
     }
 
     // MARK: Accounts
@@ -100,8 +142,10 @@ public final class MailRepository: @unchecked Sendable {
             try db.execute("DELETE FROM messages WHERE account = ?", [email])
             try db.execute("DELETE FROM message_bodies WHERE account = ?", [email])
             try db.execute("DELETE FROM attachment_files WHERE account = ?", [email])
+            vault?.removeAccount(email)
             try db.execute("DELETE FROM message_tags WHERE account = ?", [email])
             try db.execute("DELETE FROM messages_fts WHERE rowid IN (SELECT fts_rowid FROM fts_map WHERE account = ?)", [email])
+            try? db.execute("DELETE FROM \(SearchIndex.leanName) WHERE rowid IN (SELECT fts_rowid FROM fts_map WHERE account = ?)", [email])
             try db.execute("DELETE FROM fts_map WHERE account = ?", [email])
             try db.execute("DELETE FROM threads WHERE account = ?", [email])
             try db.execute("DELETE FROM thread_tags WHERE account = ?", [email])
@@ -196,18 +240,23 @@ public final class MailRepository: @unchecked Sendable {
                 // Bodies live apart so the hot table stays small.
                 try db.execute(
                     "INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text, attachments) VALUES (?, ?, ?, ?, ?)",
-                    [m.account, m.id, m.bodyHTML, m.bodyText, Self.encode(m.attachments)]
+                    [m.account, m.id, Self.packBody(m.bodyHTML), Self.packBody(m.bodyText), Self.encode(m.attachments)]
                 )
                 try deleteFromSearch(account: m.account, id: m.id)
                 // File names are searchable, so "invoice" finds the email with invoice.pdf.
                 let fileNames = m.listedAttachments.map(\.filename).joined(separator: " ")
+                let sender = "\(m.fromName) \(m.fromEmail) \(m.to) \(m.cc)", body = m.bodyText + " " + fileNames
+                if SearchIndex.isLean(db) {
+                    try db.execute("INSERT INTO messages_fts(subject, sender, body) VALUES (?, ?, ?)", [m.subject, sender, body])
+                } else {
+                    try db.execute(
+                        "INSERT INTO messages_fts(account, id, subject, sender, body) VALUES (?, ?, ?, ?, ?)",
+                        [m.account, m.id, m.subject, sender, body]
+                    )
+                }
                 try db.execute(
-                    "INSERT INTO messages_fts(account, id, subject, sender, body) VALUES (?, ?, ?, ?, ?)",
-                    [m.account, m.id, m.subject, "\(m.fromName) \(m.fromEmail) \(m.to) \(m.cc)", m.bodyText + " " + fileNames]
-                )
-                try db.execute(
-                    "INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) VALUES (?, ?, ?)",
-                    [m.account, m.id, db.lastInsertRowID()]
+                    "INSERT OR REPLACE INTO fts_map(account, id, fts_rowid, thread_id, date) VALUES (?, ?, ?, ?, ?)",
+                    [m.account, m.id, db.lastInsertRowID(), m.threadId, m.date]
                 )
             }
             try ThreadIndex.refresh(db, Set(messages.map { ThreadKey(account: $0.account, threadId: $0.threadId) }))
@@ -225,6 +274,8 @@ public final class MailRepository: @unchecked Sendable {
     private func deleteFromSearch(account: String, id: String) throws {
         guard let rowid = try db.query("SELECT fts_rowid FROM fts_map WHERE account = ? AND id = ?", [account, id]).first?.int("fts_rowid") else { return }
         try db.execute("DELETE FROM messages_fts WHERE rowid = ?", [rowid])
+        // While the lean index is filling in, it has to forget deleted mail too. (No table, no harm.)
+        try? db.execute("DELETE FROM \(SearchIndex.leanName) WHERE rowid = ?", [rowid])
         try db.execute("DELETE FROM fts_map WHERE account = ? AND id = ?", [account, id])
     }
 
@@ -237,6 +288,13 @@ public final class MailRepository: @unchecked Sendable {
         try db.transaction {
             let affected = try ThreadIndex.keys(db, account: account, messageIds: ids)
             defer { try? ThreadIndex.refresh(db, affected) }
+            if let vault {
+                for id in ids {
+                    for row in try db.query("SELECT part_id FROM attachment_files WHERE account = ? AND message_id = ? AND in_file = 1", [account, id]) {
+                        vault.remove(account: account, messageId: id, partId: row.string("part_id"))
+                    }
+                }
+            }
             for id in ids {
                 try db.execute("DELETE FROM messages WHERE account = ? AND id = ?", [account, id])
                 try db.execute("DELETE FROM message_bodies WHERE account = ? AND id = ?", [account, id])
@@ -287,12 +345,17 @@ public final class MailRepository: @unchecked Sendable {
 
     /// A file's bytes, if they've been downloaded.
     public func storedAttachment(account: String, messageId: String, partId: String) -> Data? {
-        let rows = try? reader.query(
-            "SELECT data FROM attachment_files WHERE account = ? AND message_id = ? AND part_id = ?",
+        guard let row = (try? reader.query(
+            "SELECT data, in_file FROM attachment_files WHERE account = ? AND message_id = ? AND part_id = ?",
             [account, messageId, partId]
-        )
-        return rows?.first?.data("data")
+        ))?.first else { return nil }
+        if row.int("in_file") == 1 { return vault?.read(account: account, messageId: messageId, partId: partId) }
+        return row.data("data")
     }
+
+    /// Kept files: in the vault, or still inside the store from before the vault.
+    private static let keptFile = "(f.in_file = 1 OR f.data IS NOT NULL)"
+    private static let keptBytes = "(CASE WHEN f.in_file = 1 THEN f.size ELSE length(f.data) END)"
 
     /// Messages whose files haven't been looked at yet, newest first. Once `budget` bytes are stored, only mail newer
     /// than the oldest kept file qualifies: anything older would be thrown out again straight away.
@@ -300,9 +363,9 @@ public final class MailRepository: @unchecked Sendable {
         var floor = 0.0
         if let totals = (try? reader.query(
             """
-            SELECT COALESCE(SUM(length(f.data)), 0) AS bytes, MIN(m.date) AS oldest
+            SELECT COALESCE(SUM(\(Self.keptBytes)), 0) AS bytes, MIN(m.date) AS oldest
             FROM attachment_files f JOIN messages m ON m.account = f.account AND m.id = f.message_id
-            WHERE f.data IS NOT NULL
+            WHERE \(Self.keptFile)
             """
         ))?.first, totals.int("bytes") >= budget {
             floor = totals.double("oldest")
@@ -322,11 +385,16 @@ public final class MailRepository: @unchecked Sendable {
     /// Records what was downloaded for a message. A nil means that file isn't kept. An empty list still marks the
     /// message as done.
     public func storeAttachments(account: String, messageId: String, files: [(partId: String, data: Data?)]) throws {
+        // Files go to disk first, so a row never points at a file that isn't there.
+        if let vault {
+            for file in files { if let data = file.data { try vault.write(data, account: account, messageId: messageId, partId: file.partId) } }
+        }
         try db.transaction {
             for file in files.isEmpty ? [(partId: "", data: nil)] : files {
+                let inFile = vault != nil && file.data != nil
                 try db.execute(
-                    "INSERT OR REPLACE INTO attachment_files(account, message_id, part_id, data) VALUES (?, ?, ?, ?)",
-                    [account, messageId, file.partId, file.data]
+                    "INSERT OR REPLACE INTO attachment_files(account, message_id, part_id, data, in_file, size) VALUES (?, ?, ?, ?, ?, ?)",
+                    [account, messageId, file.partId, inFile ? nil : file.data, inFile, file.data?.count]
                 )
             }
         }
@@ -336,21 +404,150 @@ public final class MailRepository: @unchecked Sendable {
     public func trimStoredAttachments(toBudget budget: Int) throws {
         let rows = try db.query(
             """
-            SELECT f.rowid AS row, length(f.data) AS bytes
+            SELECT f.rowid AS row, f.account, f.message_id, f.part_id, f.in_file, \(Self.keptBytes) AS bytes
             FROM attachment_files f JOIN messages m ON m.account = f.account AND m.id = f.message_id
-            WHERE f.data IS NOT NULL ORDER BY m.date
+            WHERE \(Self.keptFile) ORDER BY m.date
             """
         )
         var excess = rows.reduce(0) { $0 + $1.int("bytes") } - budget
-        for row in rows where excess > 0 {
-            try db.execute("UPDATE attachment_files SET data = NULL WHERE rowid = ?", [row.int("row")])
-            excess -= row.int("bytes")
+        var dropped: [Row] = []
+        try db.transaction {
+            for row in rows where excess > 0 {
+                try db.execute("UPDATE attachment_files SET data = NULL, in_file = 0, size = NULL WHERE rowid = ?", [row.int("row")])
+                excess -= row.int("bytes")
+                if row.int("in_file") == 1 { dropped.append(row) }
+            }
+        }
+        for row in dropped {
+            vault?.remove(account: row.string("account"), messageId: row.string("message_id"), partId: row.string("part_id"))
         }
     }
 
     /// After the limit goes up: files dropped or skipped earlier get another look.
     public func retrySkippedAttachments() throws {
-        try db.execute("DELETE FROM attachment_files WHERE data IS NULL")
+        try db.execute("DELETE FROM attachment_files WHERE data IS NULL AND in_file = 0")
+    }
+
+    /// Whether any downloaded files are still inside the store, from before the vault.
+    public var attachmentsLeftInStore: Bool {
+        vault != nil && ((try? backgroundReader.query("SELECT 1 AS x FROM attachment_files WHERE data IS NOT NULL LIMIT 1")) ?? []).isEmpty == false
+    }
+
+    /// Moves up to `limit` files from inside the store to the vault. Returns how many moved. The store keeps the
+    /// space they used until it's compacted.
+    @discardableResult
+    public func moveAttachmentsToVault(limit: Int = 20) throws -> Int {
+        guard let vault else { return 0 }
+        let rows = try backgroundReader.query(
+            "SELECT rowid AS row, account, message_id, part_id, data FROM attachment_files WHERE data IS NOT NULL LIMIT ?", [limit]
+        )
+        var moved: [(row: Int, size: Int)] = []
+        for row in rows {
+            guard let data = row.data("data") else { continue }
+            try vault.write(data, account: row.string("account"), messageId: row.string("message_id"), partId: row.string("part_id"))
+            moved.append((row.int("row"), data.count))
+        }
+        try db.transaction {
+            for file in moved {
+                try db.execute("UPDATE attachment_files SET data = NULL, in_file = 1, size = ? WHERE rowid = ? AND data IS NOT NULL", [file.size, file.row])
+            }
+        }
+        return moved.count
+    }
+
+    /// Dev builds: the store's size, how much of it is free space that compacting gives back, and how many
+    /// attachment files are still inside it. Instant: it reads two counters, not the store. (Breaking the space down
+    /// by table means decrypting every page, which took minutes on a store of several gigabytes.)
+    public func storageBreakdown() -> [(name: String, bytes: Int)] {
+        let pageSize = (try? backgroundReader.query("PRAGMA page_size").first?.int("page_size")) ?? 0
+        let pages = (try? backgroundReader.query("PRAGMA page_count").first?.int("page_count")) ?? 0
+        let free = (try? backgroundReader.query("PRAGMA freelist_count").first?.int("freelist_count")) ?? 0
+        return [("store file", pages * pageSize), ("in use", (pages - free) * pageSize), ("free space (compacting gives it back)", free * pageSize)]
+    }
+
+    // MARK: Slimming a store from before
+
+    /// Compresses up to `limit` bodies stored as text, after rowid `cursor`. Returns the last rowid looked at, or nil
+    /// when there are none left. Walks by rowid, so each step reads only its own rows.
+    public func compressBodies(after cursor: Int, limit: Int = 200) throws -> Int? {
+        let rows = try backgroundReader.query(
+            "SELECT rowid AS row, body_html, body_text FROM message_bodies WHERE rowid > ? ORDER BY rowid LIMIT ?", [cursor, limit]
+        )
+        guard let last = rows.last?.int("row") else { return nil }
+        var changes: [(row: Int, html: Any, text: Any)] = []
+        for row in rows where row.data("body_html") == nil || row.data("body_text") == nil {
+            let html = row.data("body_html").map { $0 as Any } ?? Self.packBody(row.string("body_html"))
+            let text = row.data("body_text").map { $0 as Any } ?? Self.packBody(row.string("body_text"))
+            if html is Data || text is Data { changes.append((row.int("row"), html, text)) }
+        }
+        if !changes.isEmpty {
+            try db.transaction {
+                for change in changes {
+                    try db.execute("UPDATE message_bodies SET body_html = ?, body_text = ? WHERE rowid = ?", [change.html, change.text, change.row])
+                }
+            }
+        }
+        return last
+    }
+
+    /// Copies up to `limit` entries of the old search index into the lean one, after rowid `cursor`. Returns the
+    /// last rowid copied, or nil when the copy has caught up and the lean index has taken over.
+    public func slimSearchIndex(after cursor: Int, limit: Int = 500) throws -> Int? {
+        guard !SearchIndex.isLean(db) else { return nil }
+        let rows = try backgroundReader.query(
+            "SELECT rowid AS row, subject, sender, body FROM messages_fts WHERE rowid > ? ORDER BY rowid LIMIT ?", [cursor, limit]
+        )
+        guard let last = rows.last?.int("row") else {
+            // Caught up. Entries at or before the cursor that the copy missed (a rowid reused after the newest
+            // entry was deleted) are found through the small rowid map, without the write lock, and copied first.
+            let missing = try backgroundReader.query(
+                "SELECT fts_rowid AS row FROM fts_map WHERE fts_rowid <= ? AND fts_rowid NOT IN (SELECT rowid FROM \(SearchIndex.leanName))", [cursor]
+            ).map { $0.int("row") }
+            try copyToLeanIndex(missing)
+            try SearchIndex.switchToLean(db, after: cursor)
+            return nil
+        }
+        try copyToLeanIndex(rows)
+        return last
+    }
+
+    private func copyToLeanIndex(_ rowids: [Int]) throws {
+        guard !rowids.isEmpty else { return }
+        for start in stride(from: 0, to: rowids.count, by: 100) {
+            let chunk = Array(rowids[start..<min(start + 100, rowids.count)])
+            let rows = try backgroundReader.query(
+                "SELECT rowid AS row, subject, sender, body FROM messages_fts WHERE rowid IN (\(Array(repeating: "?", count: chunk.count).joined(separator: ", ")))", chunk
+            )
+            try copyToLeanIndex(rows)
+        }
+    }
+
+    private func copyToLeanIndex(_ rows: [Row]) throws {
+        try db.transaction {
+            for row in rows {
+                try db.execute(
+                    "INSERT OR REPLACE INTO \(SearchIndex.leanName)(rowid, subject, sender, body) VALUES (?, ?, ?, ?)",
+                    [row.int("row"), row.string("subject"), row.string("sender"), row.string("body")]
+                )
+            }
+        }
+    }
+
+    public var searchIndexIsLean: Bool { SearchIndex.isLean(db) }
+
+    /// The old search index, set aside and waiting for compacting to drop it.
+    public var hasRetiredSearchIndex: Bool {
+        ((try? backgroundReader.query("SELECT 1 AS x FROM sqlite_schema WHERE name = ?", [SearchIndex.retiredName])) ?? []).isEmpty == false
+    }
+
+    /// Rewrites the store without the space its old attachment files used. Takes the write lock for as long as it
+    /// runs (tens of seconds for a big store), so it's only run where nothing is waiting to write.
+    public func compact() throws {
+        try db.run("DROP TABLE IF EXISTS \(SearchIndex.retiredName)")
+        try db.run("VACUUM")
+        // With a write-ahead log, the compacted store lands in the log first; the file only shrinks once it's
+        // checkpointed back.
+        try db.run("PRAGMA wal_checkpoint(TRUNCATE)")
     }
 
     /// Adds and removes labels on every message in a thread. Returns the labels from before the change, for undo.
@@ -523,9 +720,33 @@ public final class MailRepository: @unchecked Sendable {
         return summaries(for: [key], mailbox: .all).first ?? summaries(for: [key], mailbox: .trash).first
     }
 
+    /// The conversations with the newest full-text matches, walking matches newest first and stopping once a page
+    /// is found, so a search matching most of a mailbox costs no more than one matching a few emails. Returns nil
+    /// when the walk ran out before filling the page (a few very long conversations), and the caller groups instead.
+    private func newestMatches(fts: String, clauses: [String], arguments: [Any?], limit: Int) -> [ThreadKey]? {
+        let cap = max(1500, limit * 15)
+        let rows = (try? reader.query("""
+            SELECT f.account, f.thread_id FROM fts_map f INDEXED BY fts_map_newest
+            JOIN messages m ON m.account = f.account AND m.id = f.id
+            WHERE f.fts_rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?)
+              AND \(clauses.joined(separator: " AND "))
+            ORDER BY f.date DESC LIMIT ?
+            """, [fts] + arguments + [cap])) ?? []
+        var seen = Set<ThreadKey>()
+        var keys: [ThreadKey] = []
+        for row in rows {
+            let key = ThreadKey(account: row.string("account"), threadId: row.string("thread_id"))
+            if seen.insert(key).inserted { keys.append(key) }
+            if keys.count == limit { return keys }
+        }
+        return rows.count < cap ? keys : nil
+    }
+
     /// Search: full-text and operator matches at the message level, grouped into conversations.
     private func searchThreads(_ query: ThreadQuery) -> [ThreadSummary] {
         guard let search = query.search else { return [] }
+        Thread.current.threadDictionary[Self.searchingKey] = true
+        defer { Thread.current.threadDictionary[Self.searchingKey] = nil }
         var clauses = [
             "m.labels NOT LIKE '%,\(SystemLabel.spam),%'",
             "m.labels NOT LIKE '%,\(SystemLabel.draft),%'",
@@ -545,13 +766,7 @@ public final class MailRepository: @unchecked Sendable {
             clauses.append("m.account = ?")
             arguments.append(account)
         }
-        if let fts = search.ftsExpression {
-            clauses.append("""
-            (m.account, m.id) IN (SELECT f.account, f.id FROM fts_map f
-                WHERE f.fts_rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))
-            """)
-            arguments.append(fts)
-        }
+        let fts = search.ftsExpression
         for value in search.from {
             clauses.append("(m.from_email LIKE ? OR m.from_name LIKE ?)")
             arguments += ["%\(value)%", "%\(value)%"]
@@ -584,6 +799,17 @@ public final class MailRepository: @unchecked Sendable {
                   AND json_extract(f.value, '$.filename') LIKE ?)
             """)
             arguments.append("%\(value)%")
+        }
+
+        if let fts, let found = newestMatches(fts: fts, clauses: clauses, arguments: arguments, limit: query.limit) {
+            return summaries(for: found, mailbox: mailbox)
+        }
+        if let fts {
+            clauses.append("""
+            (m.account, m.id) IN (SELECT f.account, f.id FROM fts_map f
+                WHERE f.fts_rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?))
+            """)
+            arguments.append(fts)
         }
 
         // Group the matching messages by thread, then join back to fetch the newest one.
@@ -969,6 +1195,20 @@ public final class MailRepository: @unchecked Sendable {
 
     // MARK: Encoding
 
+    /// Bodies over a few hundred bytes are kept LZFSE-compressed, as a blob; shorter ones as text. HTML mail
+    /// shrinks 5-10x, and bodies were most of a big store. A blob is how a compressed body is told apart.
+    static func packBody(_ text: String) -> Any {
+        let data = Data(text.utf8)
+        guard data.count > 256, let packed = try? (data as NSData).compressed(using: .lzfse) as Data else { return text }
+        return packed
+    }
+
+    static func unpackBody(_ row: Row, _ column: String) -> String {
+        guard let packed = row.data(column) else { return row.string(column) }
+        guard let data = try? (packed as NSData).decompressed(using: .lzfse) as Data else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
     /// Full messages, bodies included. Only for reading a thread or tagging, never for lists.
     static let selectWithBodies = """
     SELECT m.*, COALESCE(b.body_html, '') AS body_html, COALESCE(b.body_text, '') AS body_text,
@@ -1007,8 +1247,8 @@ public final class MailRepository: @unchecked Sendable {
             cc: row.string("cc"),
             subject: row.string("subject"),
             snippet: row.string("snippet"),
-            bodyHTML: row.string("body_html"),
-            bodyText: row.string("body_text"),
+            bodyHTML: unpackBody(row, "body_html"),
+            bodyText: unpackBody(row, "body_text"),
             date: Date(timeIntervalSince1970: row.double("date")),
             labels: decode(row.string("labels")),
             messageIdHeader: row.string("message_id"),

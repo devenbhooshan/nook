@@ -114,6 +114,10 @@ struct NookCommands: Commands {
             .keyboardShortcut("\\")
             Button("Keyboard Shortcuts") { store.showHelp = true }
                 .keyboardShortcut("/")
+            if Diagnostics.isEnabled {
+                Button("Copy Diagnostics") { store.copyDiagnostics() }
+                    .keyboardShortcut("d", modifiers: [.command, .option])
+            }
         }
     }
 }

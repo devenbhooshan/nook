@@ -73,6 +73,9 @@ public enum MailStore {
     private static func connect(path: String, key: Data) throws -> MailRepository {
         let writer = try Database(path: path, key: key)
         let reader = try Database(path: path, key: key, readOnly: true)
-        return MailRepository(db: writer, reader: reader)
+        let mainReader = try Database(path: path, key: key, readOnly: true)
+        let searcher = try Database(path: path, key: key, readOnly: true)
+        let vault = AttachmentVault(root: AttachmentVault.root(forDatabaseAt: path), storeKey: key)
+        return MailRepository(db: writer, reader: reader, mainReader: mainReader, searcher: searcher, vault: vault)
     }
 }

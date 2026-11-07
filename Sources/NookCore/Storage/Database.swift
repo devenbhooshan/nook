@@ -133,6 +133,12 @@ public final class Database: @unchecked Sendable {
         handle = nil
     }
 
+    /// Makes the statement running on this connection stop early with an error. Thread-safe by SQLite's design,
+    /// so it doesn't take the lock that the running statement holds.
+    public func interrupt() {
+        if let handle { sqlite3_interrupt(handle) }
+    }
+
     /// Runs one or more statements that take no arguments.
     public func run(_ sql: String) throws {
         lock.lock(); defer { lock.unlock() }
@@ -242,7 +248,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 12
+    static let version = 15
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -263,8 +269,11 @@ enum Schema {
                 try db.run("""
                 CREATE TABLE IF NOT EXISTS fts_map(
                     account TEXT NOT NULL, id TEXT NOT NULL, fts_rowid INTEGER NOT NULL, PRIMARY KEY(account, id));
-                INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) SELECT account, id, rowid FROM messages_fts;
                 """)
+                // The lean index (version 15) has no account and id to read; anything it holds is already mapped.
+                if !SearchIndex.isLean(db) {
+                    try db.run("INSERT OR REPLACE INTO fts_map(account, id, fts_rowid) SELECT account, id, rowid FROM messages_fts")
+                }
             }),
             (6, {
                 // Where an unfinished first sync started, so an interrupted one resumes instead of starting over.
@@ -302,6 +311,37 @@ enum Schema {
             // Search finds messages by their search rowid. Without this, every match read its account and id
             // back out of the search table, which crawled with years of mail.
             (12, { try db.run("CREATE INDEX IF NOT EXISTS fts_map_rowid ON fts_map(fts_rowid)") }),
+            (13, {
+                // Search walks matches newest first and stops once it has a page of conversations. Grouping every
+                // match instead took up to two seconds for a search like "dev" that matches most of a mailbox.
+                if try !hasColumn(db, table: "fts_map", column: "thread_id") {
+                    try db.run("ALTER TABLE fts_map ADD COLUMN thread_id TEXT")
+                    try db.run("ALTER TABLE fts_map ADD COLUMN date REAL")
+                }
+                try db.run("""
+                UPDATE fts_map SET thread_id = m.thread_id, date = m.date
+                    FROM messages m WHERE m.account = fts_map.account AND m.id = fts_map.id;
+                CREATE INDEX IF NOT EXISTS fts_map_newest ON fts_map(date, fts_rowid, account, thread_id, id);
+                """)
+            }),
+            (14, {
+                // Attachment files move out of the store into encrypted files beside it (`AttachmentVault`).
+                // `in_file` marks the ones on disk; `size` keeps the storage limit's sums from opening them.
+                if try !hasColumn(db, table: "attachment_files", column: "in_file") {
+                    try db.run("ALTER TABLE attachment_files ADD COLUMN in_file INTEGER NOT NULL DEFAULT 0")
+                    try db.run("ALTER TABLE attachment_files ADD COLUMN size INTEGER")
+                }
+            }),
+            (15, {
+                // A search index that keeps only the words, not a second copy of every email's text (about 0.7 GB
+                // on a big mailbox). Search only ever matches it. An empty store switches now; a full one fills the
+                // new index in the background (`MailRepository.slimSearchIndex`) and switches when it's done.
+                try db.run(SearchIndex.createLean(named: SearchIndex.leanName))
+                if try db.query("SELECT 1 AS x FROM messages_fts LIMIT 1").isEmpty {
+                    try SearchIndex.switchToLean(db)
+                    try db.run("DROP TABLE IF EXISTS \(SearchIndex.retiredName)")
+                }
+            }),
         ]
         for (number, step) in steps where current < number {
             try step()

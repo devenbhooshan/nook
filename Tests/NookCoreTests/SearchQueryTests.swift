@@ -41,7 +41,10 @@ struct SearchQueryTests {
     @Test func ftsExpressionQuotesEachTermAsAPrefix() {
         #expect(SearchQuery.parse("invoice acme")?.ftsExpression == "\"invoice\"* \"acme\"*")
         #expect(SearchQuery.parse("from:anna")?.ftsExpression == nil)
-        #expect(SearchQuery.parse("say \"hi\"")?.ftsExpression == "\"say\"* \"hi\"*")
+        #expect(SearchQuery.parse("say \"hi\"")?.ftsExpression == "\"say\"* \"hi\"")
+        // One and two letters match whole words: as prefixes they match most of a mailbox.
+        #expect(SearchQuery.parse("s")?.ftsExpression == "\"s\"")
+        #expect(SearchQuery.parse("ai lin")?.ftsExpression == "\"ai\" \"lin\"*")
     }
 
     @Test func searchingOverridesTheSelectedMailbox() {

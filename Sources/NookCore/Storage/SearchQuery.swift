@@ -88,12 +88,16 @@ public struct SearchQuery: Equatable, Sendable {
         return tokens
     }
 
-    /// The free-text terms as an FTS5 `MATCH` expression: every term must match, as a prefix.
+    /// The free-text terms as an FTS5 `MATCH` expression: every term must match, as a prefix from three letters.
+    /// Shorter terms match whole words only: "s" as a prefix matches most of a mailbox, and searching years of mail
+    /// for it took over a second on every keystroke.
+    static let shortestPrefix = 3
+
     public var ftsExpression: String? {
         let parts = terms.compactMap { term -> String? in
             let cleaned = term.replacingOccurrences(of: "\"", with: "")
             guard !cleaned.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-            return "\"\(cleaned)\"*"
+            return cleaned.count < Self.shortestPrefix ? "\"\(cleaned)\"" : "\"\(cleaned)\"*"
         }
         return parts.isEmpty ? nil : parts.joined(separator: " ")
     }

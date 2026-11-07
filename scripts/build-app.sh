@@ -6,8 +6,11 @@ cd "$(dirname "$0")/.."
 configuration="release"
 [[ "${1:-}" == "--debug" ]] && configuration="debug"
 
-swift build -c "$configuration"
-bin="$(swift build -c "$configuration" --show-bin-path)"
+# NOOK_DEV=1 builds a dev copy that times every action (Mail → Copy Diagnostics). Releases never set it.
+dev=()
+[[ "${NOOK_DEV:-}" == "1" ]] && dev=(-Xswiftc -DNOOK_DEV)
+swift build -c "$configuration" ${dev[@]+"${dev[@]}"}
+bin="$(swift build -c "$configuration" ${dev[@]+"${dev[@]}"} --show-bin-path)"
 
 app="build/Nook.app"
 rm -rf "$app"

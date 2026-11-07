@@ -246,6 +246,8 @@ final class AppStore: ObservableObject {
         guard !started else { return }
         started = true
         Self.current = self
+        startDiagnostics()
+        moveAttachmentsOutOfStore()
         AttachmentFiles.clearTemporaryFiles()
         loadAccounts()
         upgradeTagsIfNeeded()
@@ -385,7 +387,7 @@ final class AppStore: ObservableObject {
         let delay = historyLoads.isEmpty ? 0.15 : 2.0
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             self?.reloadPending = false
-            self?.reload()
+            self?.reload(inBackground: true)
         }
     }
 
@@ -405,23 +407,34 @@ final class AppStore: ObservableObject {
               let index = threads.firstIndex(where: { $0.id == thread.id }),
               index >= threads.count - 20 else { return }
         listLimit += Self.pageSize
-        reload()
+        reload(inBackground: true)
     }
 
     private var searchGeneration = 0
 
-    func reload(resetSelection: Bool = false) {
+    /// Re-reads the list. Your own actions (Esc, mark done, switching tabs) read it right away, so what you did shows
+    /// at once. Searches, and refreshes because mail arrived (`inBackground`), read it off the main thread: with
+    /// gigabytes of mail a read now and then has to go to disk, and doing that on the main thread froze Nook.
+    func reload(resetSelection: Bool = false, inBackground: Bool = false) {
         let query = currentQuery
         searchGeneration += 1
-        guard query.search != nil, !isDemo else {
-            apply(repo.threads(query), resetSelection: resetSelection)
+        // The demo's searches stay immediate for screenshots; its background refreshes take the real path.
+        guard (query.search != nil && !isDemo) || inBackground else {
+            let step = Diagnostics.step("list query")
+            let updated = repo.threads(query)
+            step?.end()
+            apply(updated, resetSelection: resetSelection)
             return
         }
         // Searching years of mail can take a moment. Do it off the main thread so typing stays smooth,
         // and drop results a newer keystroke has already replaced.
         let generation = searchGeneration, repo = repo
+        // The search or refresh this one replaces would only hold it up.
+        repo.cancelSearch()
         Task.detached(priority: .userInitiated) { [weak self] in
-            let updated = repo.threads(query)
+            let step = Diagnostics.step(query.search != nil ? "search query" : "list query · background")
+            let updated = repo.threadsForDisplay(query)
+            step?.end()
             await MainActor.run {
                 guard let self, self.searchGeneration == generation else { return }
                 self.apply(updated, resetSelection: resetSelection)
@@ -430,6 +443,8 @@ final class AppStore: ObservableObject {
     }
 
     private func apply(_ updated: [ThreadSummary], resetSelection: Bool) {
+        let step = Diagnostics.step("apply list (\(updated.count) rows)")
+        defer { step?.end() }
         let previous = threads
         let previousIndex = selectedID.flatMap { id in previous.firstIndex { $0.id == id } }
         if updated != threads { threads = updated }
@@ -442,9 +457,12 @@ final class AppStore: ObservableObject {
         }
 
         hasStoredMail = !threads.isEmpty || repo.hasMessages()
-        refreshCounts()
+        // Typing a search doesn't change any counts, and recounting would compete with the search for the store.
+        if !isSearching { refreshCounts() }
         if let open = openThread {
+            let messagesStep = Diagnostics.step("re-read open conversation")
             let messages = repo.threadMessages(account: open.account, threadId: open.threadId)
+            messagesStep?.end()
             if messages.isEmpty {
                 closeThread()
             } else if messages != openMessages {
@@ -457,25 +475,39 @@ final class AppStore: ObservableObject {
 
     /// Counts scan every conversation, which takes a while with years of mail. Work them out off the main
     /// thread so the list never waits for them; a newer refresh replaces one still running.
+    /// One count at a time, then one more if anything changed meanwhile. Restarting on every refresh meant that
+    /// while mail poured in, counts started over every couple of seconds and never finished, keeping the disk busy.
     private func refreshCounts() {
-        countsTask?.cancel()
+        if countsRunning {
+            countsAgain = true
+            return
+        }
+        countsRunning = true
         let repo = repo, scope = scope
-        countsTask = Task.detached(priority: .userInitiated) { [weak self] in
+        countsTask = Task.detached(priority: .utility) { [weak self] in
+            let step = Diagnostics.step("counts")
             let unread = repo.unreadInboxCounts()
-            guard !Task.isCancelled else { return }
             let split = repo.splitCounts(account: scope)
-            guard !Task.isCancelled else { return }
             let unreadSplit = repo.splitCounts(account: scope, unreadOnly: true)
-            guard !Task.isCancelled else { return }
+            step?.end()
             await MainActor.run {
-                guard let self, self.scope == scope else { return }
-                if self.unreadCounts != unread { self.unreadCounts = unread }
-                if self.splitCounts != split { self.splitCounts = split }
-                if self.unreadSplitCounts != unreadSplit { self.unreadSplitCounts = unreadSplit }
-                self.updateDockBadge()
+                guard let self else { return }
+                self.countsRunning = false
+                if self.scope == scope {
+                    if self.unreadCounts != unread { self.unreadCounts = unread }
+                    if self.splitCounts != split { self.splitCounts = split }
+                    if self.unreadSplitCounts != unreadSplit { self.unreadSplitCounts = unreadSplit }
+                    self.updateDockBadge()
+                }
+                if self.countsAgain || self.scope != scope {
+                    self.countsAgain = false
+                    self.refreshCounts()
+                }
             }
         }
     }
+    private var countsRunning = false
+    private var countsAgain = false
 
     // MARK: Navigation
 
@@ -569,12 +601,16 @@ final class AppStore: ObservableObject {
 
     func open(_ thread: ThreadSummary? = nil) {
         guard let thread = thread ?? selectedThread else { return }
+        let step = Diagnostics.step("open conversation")
+        defer { step?.end() }
         selectedID = thread.id
         if effectiveMailbox == .drafts { return openGmailDraft(thread) }
         if unreadOnly { keptVisible.insert(thread.id) }
         ReminderAlerts.shared.dismiss(account: thread.account, threadId: thread.threadId)
         openThread = thread
+        let messagesStep = Diagnostics.step("read conversation messages")
         openMessages = repo.threadMessages(account: thread.account, threadId: thread.threadId)
+        messagesStep?.end()
         if thread.isUnread { markRead(thread) }
         fillInAttachments(thread)
     }
@@ -592,12 +628,14 @@ final class AppStore: ObservableObject {
     }
 
     func closeThread() {
+        let step = Diagnostics.step("close conversation")
+        defer { step?.end() }
         openThread = nil
         openMessages = []
         // Under "Unread only", what you read while in the reader leaves the list once you're back in it.
         if !keptVisible.isEmpty {
             keptVisible = []
-            reload()
+            reload(inBackground: true)
         }
     }
 
@@ -655,7 +693,7 @@ final class AppStore: ObservableObject {
             isSyncing = false
             lastSynced = Date()
             loadAccounts(checkSignIns: !syncErrors.isEmpty || !signedOutAccounts.isEmpty)
-            reload()
+            reload(inBackground: true)
             // New mail may answer a follow-up.
             wakeDueReminders()
             refreshPhotosIfDue()
@@ -690,7 +728,7 @@ final class AppStore: ObservableObject {
                 }
                 historyLoads.remove(email)
                 historyProgress[email] = nil
-                reload()
+                reload(inBackground: true)
                 // The choice may have grown while this ran.
                 if accounts.contains(where: { $0.email == email }) { loadMailHistoryIfNeeded() }
             }
@@ -763,7 +801,7 @@ final class AppStore: ObservableObject {
                 Task {
                     do { try await sync.sync(result.email) } catch { syncErrors[result.email] = error.localizedDescription }
                     loadAccounts()
-                    reload()
+                    reload(inBackground: true)
                     refreshPhotosIfDue()
                     Task.detached { await tagger.run() }
                 }
@@ -850,6 +888,140 @@ final class AppStore: ObservableObject {
     var openSettingsHandler: (() -> Void)?
     /// Set by the root view from SwiftUI's `openWindow` action, so the Dock icon can reopen a closed window.
     var openMainWindowHandler: (() -> Void)?
+
+    // MARK: Attachment storage
+
+    private static let compactPendingKey = "storage.compactPending"
+    private var inactiveSince: Date?
+    private var compactTimer: Timer?
+
+    /// Attachments used to live inside the store, which made it gigabytes big and every read slower. Moves them to
+    /// encrypted files beside it, a few at a time in the background, then compacts the store once you're away.
+    private func moveAttachmentsOutOfStore() {
+        guard repo.vault != nil, !isDemo else { return }
+        let repo = repo, defaults = defaults
+        Task.detached(priority: .background) { [weak self] in
+            var movedAny = false
+            while repo.attachmentsLeftInStore {
+                let step = Diagnostics.step("move attachments to files")
+                let moved = (try? repo.moveAttachmentsToVault(limit: 20)) ?? 0
+                step?.end()
+                guard moved > 0 else { break }
+                movedAny = true
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            if movedAny { defaults.set(true, forKey: Self.compactPendingKey) }
+
+            // Then the bodies, compressed, and the search index without its second copy of every email's text.
+            // Small batches at the lowest priority with a pause between them, so the store's write lock is free
+            // nearly all the time for whatever you do; each resumes where it stopped after a restart.
+            var cursor = defaults.integer(forKey: Self.bodiesCursorKey)
+            while true {
+                let step = Diagnostics.step("compress 200 bodies")
+                guard let next = try? repo.compressBodies(after: cursor, limit: 200) else { step?.end(); break }
+                step?.end()
+                cursor = next
+                defaults.set(cursor, forKey: Self.bodiesCursorKey)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            cursor = defaults.integer(forKey: Self.searchCursorKey)
+            while !repo.searchIndexIsLean {
+                defer { if repo.searchIndexIsLean { defaults.set(true, forKey: Self.compactPendingKey) } }
+                let step = Diagnostics.step("slim 100 search entries")
+                let next = try? repo.slimSearchIndex(after: cursor, limit: 100)
+                step?.end()
+                guard let next else { break }
+                cursor = next
+                defaults.set(cursor, forKey: Self.searchCursorKey)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            await MainActor.run { self?.compactWhenAway() }
+        }
+    }
+
+    private static let bodiesCursorKey = "storage.bodiesCompressedThrough"
+    private static let searchCursorKey = "storage.searchSlimmedThrough"
+
+    /// Compacting takes the store's write lock for several seconds, so it waits until Nook has been in the
+    /// background for a minute with nothing syncing: then nobody's marking mail done while it runs.
+    private func compactWhenAway() {
+        guard defaults.bool(forKey: Self.compactPendingKey), compactTimer == nil else { return }
+        NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.inactiveSince = Date() }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.inactiveSince = nil }
+        }
+        if !NSApp.isActive { inactiveSince = Date() }
+        compactTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.compactIfAway() }
+        }
+    }
+
+    private func compactIfAway() {
+        guard let since = inactiveSince, Date().timeIntervalSince(since) >= 60, !isSyncing, historyLoads.isEmpty else { return }
+        compactTimer?.invalidate()
+        compactTimer = nil
+        let repo = repo, defaults = defaults
+        Task.detached(priority: .utility) {
+            // Stores that free space as they go (auto-vacuum) have little to give back, and compacting rewrites the
+            // whole file under the write lock: only worth it when at least a tenth of the file is free.
+            let space = repo.storageBreakdown()
+            let total = space.first { $0.name == "store file" }?.bytes ?? 0
+            let free = space.first { $0.name.hasPrefix("free space") }?.bytes ?? 0
+            if repo.hasRetiredSearchIndex || (total > 0 && free * 10 >= total) {
+                let step = Diagnostics.step("compact the mail store")
+                try? repo.compact()
+                step?.end()
+            }
+            defaults.set(false, forKey: Self.compactPendingKey)
+        }
+    }
+
+    // MARK: Diagnostics (dev builds)
+
+    private func startDiagnostics() {
+        guard Diagnostics.isEnabled else { return }
+        Diagnostics.shared.context = { [weak self] in
+            guard let self else { return "" }
+            let screen = self.showPalette ? "palette" : self.showCalendar ? "calendar" : self.openThread != nil ? "reader" : self.isSearching ? "search" : "list"
+            return "\(screen) · \(self.mailbox.title) · \(self.threads.count) rows"
+        }
+        Diagnostics.shared.start()
+    }
+
+    /// Mail → Copy Diagnostics: the timing report, for pasting into a bug report or a chat.
+    func copyDiagnostics() {
+        showToast("Measuring…")
+        let repo = repo
+        // Counting messages and measuring a store of several gigabytes reads all of it: not on the main thread.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let messages = (try? repo.db.query("SELECT COUNT(*) AS n FROM messages").first?.int("n")) ?? 0
+            let storage = repo.storageBreakdown()
+                .map { "  \($0.name): \(ByteCountFormatter.string(fromByteCount: Int64($0.bytes), countStyle: .file))" }
+                .joined(separator: "\n")
+            let vaultBytes = repo.vault.map { Self.folderSize($0.root) } ?? 0
+            await MainActor.run {
+                guard let self else { return }
+                let summary = "\(self.accounts.count) accounts · \(messages) messages stored · \(self.threads.count) rows in the list · history loading: \(self.historyLoads.isEmpty ? "no" : self.historyLoads.sorted().joined(separator: ", ")) · tagging pending: \(self.taggerStatus.pending)"
+                    + "\n\nSTORE SPACE\n" + storage
+                    + "\n  attachment files beside the store: \(ByteCountFormatter.string(fromByteCount: Int64(vaultBytes), countStyle: .file))"
+                let report = Diagnostics.shared.report(summary: summary)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(report, forType: .string)
+                // Also on disk, since a long paste can get cut short on its way into a chat.
+                if let url = try? Database.defaultURL().deletingLastPathComponent().appendingPathComponent("diagnostics.txt") {
+                    try? report.write(to: url, atomically: true, encoding: .utf8)
+                }
+                self.showToast("Diagnostics copied")
+            }
+        }
+    }
+
+    nonisolated private static func folderSize(_ url: URL) -> Int {
+        let files = FileManager.default.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey])?.allObjects as? [URL] ?? []
+        return files.reduce(0) { $0 + ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+    }
 
     /// The running app's store, for AppKit callbacks that can't reach SwiftUI state.
     static weak var current: AppStore?
@@ -966,13 +1138,24 @@ final class AppStore: ObservableObject {
     }
 
     private func markRead(_ thread: ThreadSummary) {
-        let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [], remove: [SystemLabel.unread])) ?? []
-        remote(thread, rollback: snapshots) { try await $0.modifyThread(id: thread.threadId, add: [], remove: [SystemLabel.unread]) }
-        scheduleReload()
+        let step = Diagnostics.step("mark read")
+        defer { step?.end() }
+        // Written in the background: opening an email waited on the store's write lock while a sync held it.
+        let repo = repo
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [], remove: [SystemLabel.unread])) ?? []
+            await MainActor.run {
+                guard let self else { return }
+                self.remote(thread, rollback: snapshots) { try await $0.modifyThread(id: thread.threadId, add: [], remove: [SystemLabel.unread]) }
+                self.scheduleReload()
+            }
+        }
     }
 
     /// Applies a label change locally right away, mirrors it to Gmail, and offers undo when there's a message to show.
     private func changeLabels(_ thread: ThreadSummary, add: Set<String>, remove: Set<String>, message: String?) {
+        let step = Diagnostics.step("change labels")
+        defer { step?.end() }
         let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: add, remove: remove)) ?? []
         if message != nil { advance(after: thread) } else { refreshAfterChange(thread) }
         remote(thread, rollback: snapshots) { try await $0.modifyThread(id: thread.threadId, add: Array(add), remove: Array(remove)) }
@@ -1042,7 +1225,7 @@ final class AppStore: ObservableObject {
                 } else {
                     showToast("Couldn't update Gmail, so the change was undone. \(error.localizedDescription)", isError: true)
                 }
-                reload()
+                reload(inBackground: true)
                 try? await sync.refreshThread(account: thread.account, threadId: thread.threadId)
             }
         }
@@ -1194,7 +1377,7 @@ final class AppStore: ObservableObject {
         let settled = (try? repo.settleReminders()) ?? 0
         let due = repo.dueReminders(at: now)
         for reminder in due { wake(reminder, at: now) }
-        if settled > 0 || !due.isEmpty { reload() }
+        if settled > 0 || !due.isEmpty { reload(inBackground: true) }
         scheduleReminders()
     }
 
@@ -1374,7 +1557,7 @@ final class AppStore: ObservableObject {
                     try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
                     threadId = try await service.sendDraft(id: id) ?? draft.threadId
                     try? repo.deleteMessages(account: draft.from, ids: [messageId])
-                    reload()
+                    reload(inBackground: true)
                 } else {
                     threadId = try await service.send(raw: raw, threadId: draft.threadId)
                 }
@@ -1602,6 +1785,9 @@ final class AppStore: ObservableObject {
                 self?.openSettings()
             },
         ]
+        if Diagnostics.isEnabled {
+            commands.append(PaletteCommand(title: "Copy diagnostics", section: "General", systemImage: "stopwatch", shortcut: "⌥⌘D") { [weak self] in self?.copyDiagnostics() })
+        }
         commands += Mailbox.allCases.map { mailbox in
             PaletteCommand(title: "Go to \(mailbox.title)", section: "Go to", systemImage: mailbox.systemImage, shortcut: nil) { [weak self] in self?.setMailbox(mailbox) }
         }

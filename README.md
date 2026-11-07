@@ -160,7 +160,7 @@ Files show up under the message they came with. Images and PDFs get a preview; o
 - **Right-click** for Save to Downloads, Save As… and Show in Finder. With more than one file, **Save all to Downloads** saves them together. These are also in the ⌘K palette.
 - Images placed inside an email (screenshots pasted into Gmail, logos in a signature) show where the sender put them, and aren't listed again as files.
 
-Nook downloads attachments in the background, newest mail first, and keeps them in its encrypted store, so they open instantly. It keeps up to 50 GB (change this in **Settings → Privacy**), dropping the oldest mail's files past that, and leaves files over 25 MB in Gmail. Anything not stored is downloaded from Gmail when you use it. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
+Nook downloads attachments in the background, newest mail first, and keeps them as encrypted files beside its mail store (`~/Library/Application Support/Nook/Attachments`), so they open instantly. Each file is sealed with AES-GCM under a key derived from the store's key in your Keychain, and named by a hash, so the folder reveals nothing. Keeping them out of the store keeps it small, which keeps lists, counts and search fast. Stores from before this move their files out in the background, then compact once Nook has been in the background for a minute. It keeps up to 50 GB (change this in **Settings → Privacy**), dropping the oldest mail's files past that, and leaves files over 25 MB in Gmail. Anything not stored is downloaded from Gmail when you use it. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
 
 To send files, press `⌘⇧A` or click the paperclip, drop files anywhere on the message, or paste with `⌘V`: a copied file or a screenshot is attached, and copied text stays text. Images and PDFs show a thumbnail, and clicking a file previews it in Quick Look. Gmail's limit is 25 MB per message, and Nook tells you before you press Send. Forwarding keeps the original's files, and a Gmail draft opened in Nook keeps its attachments; both are fetched from Gmail when you send. Assistants connected over MCP see file names, types and sizes, and can read a file you ask them about with `get_attachment`, which reads Nook's stored copy, or downloads that one file from Gmail if it isn't stored yet.
 
@@ -170,7 +170,7 @@ Drafts you start in Gmail, on any device, show up under **Drafts** (`g d`), one 
 
 ## Search
 
-Search covers every message stored locally, with full-text prefix matching. It also understands Gmail-style operators:
+Search covers every message stored locally, with full-text prefix matching from three letters (one- and two-letter words match whole words). It also understands Gmail-style operators:
 
 ```
 from:anna  to:ben  tag:receipt  is:unread  is:starred  in:sent  account:work  "exact phrase"
@@ -282,7 +282,7 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | OAuth tokens, client secret | macOS Keychain (`com.devenbhooshan.nook`, this device only) |
 | Senders' profile photos | `~/Library/Caches/com.devenbhooshan.nook/Avatars`, downloaded once from Google, files named by a hash of the address |
 | Company logos (off by default) | Same folder. With **Settings → Privacy → Show company logos** on, Nook looks up each sender's domain in DNS (BIMI) and downloads its logo from the company's own server |
-| Attachment files | Inside the encrypted store, up to the limit in Settings → Privacy (50 GB by default) |
+| Attachment files | Encrypted files in `Attachments/` beside the store (AES-GCM, key derived from the store's), up to the limit in Settings → Privacy (50 GB by default) |
 | Attachments you open, preview or drag | A temporary folder (`$TMPDIR/Nook Attachments`) only you can read, emptied when Nook starts and quits. Files you save go where you save them |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
@@ -295,7 +295,16 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 ./scripts/test.sh                        # run the test suite
 swift run Nook --demo                    # run from source on sample data
 ./scripts/build-app.sh --debug           # debug .app bundle
+./scripts/benchmark.sh                   # speed checks on a 120,000-message mailbox
+NOOK_DEV=1 ./scripts/build-app.sh        # dev build that times every action
 ```
+
+### Performance
+
+Every action has to feel instant with years of mail. Two tools keep it that way:
+
+- **`scripts/benchmark.sh`** builds a mailbox the size of a real one (120,000 messages over four years, three accounts) once, keeps it in `build/`, and fails if a search, list or count takes over 50 ms. The regular suite also has smaller per-action budgets.
+- **The dev build** (`NOOK_DEV=1 ./scripts/build-app.sh`) times every key press and click from the moment it happens until Nook is idle, notes the slow steps inside it (queries, list reloads, counts), and catches the main thread freezing. **Mail → Copy Diagnostics** (⌥⌘D) copies a plain-text report and saves it to `~/Library/Application Support/Nook/diagnostics.txt`. It names actions and steps only, never mail content. Release builds leave all of it out.
 
 Demo mode can drive the UI on its own, so changes can be checked without clicking by hand or granting Accessibility access. It posts events to its own window:
 
