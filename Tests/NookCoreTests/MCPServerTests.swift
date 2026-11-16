@@ -133,6 +133,19 @@ struct MCPServerTests {
         #expect(MCPSettings.isEnabled(environment: ["NOOK_MCP_ENABLED": "1"]))
         #expect(!MCPSettings.isEnabled(environment: ["NOOK_MCP_ENABLED": "0"]))
     }
+
+    /// A server that outlived an update must refuse, not quietly answer with what it can't read (bodies as "").
+    @Test func anOutdatedServerRefusesInsteadOfReturningBlanks() throws {
+        #expect(try !tool("get_thread", ["account": "me@example.com", "thread_id": "T"]).isError)
+        // A newer Nook upgrades the store past what this code knows.
+        try repo.db.run("PRAGMA user_version = \(Schema.version + 1)")
+        let calls: [(String, [String: Any])] = [("get_thread", ["account": "me@example.com", "thread_id": "T"]), ("search_threads", ["query": "invoice"]), ("list_accounts", [:])]
+        for (name, arguments) in calls {
+            let result = try tool(name, arguments)
+            #expect(result.isError, "\(name)")
+            #expect(result.text.hasPrefix("Nook was updated; reconnect the nook MCP server"), "\(name): \(result.text)")
+        }
+    }
 }
 
 @Suite("nook:// links")

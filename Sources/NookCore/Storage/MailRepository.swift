@@ -535,6 +535,13 @@ public final class MailRepository: @unchecked Sendable {
 
     public var searchIndexIsLean: Bool { SearchIndex.isLean(db) }
 
+    /// True when a newer Nook has upgraded the store past what this code understands. A long-running process
+    /// (an MCP server a Claude session started days ago) can outlive an update; reading on would quietly return
+    /// wrong answers, like a compressed body as "".
+    public var storeIsNewerThanThisCode: Bool {
+        ((try? reader.query("PRAGMA user_version").first?.int("user_version")) ?? 0) > Schema.version
+    }
+
     /// The old search index, set aside and waiting for compacting to drop it.
     public var hasRetiredSearchIndex: Bool {
         ((try? backgroundReader.query("SELECT 1 AS x FROM sqlite_schema WHERE name = ?", [SearchIndex.retiredName])) ?? []).isEmpty == false

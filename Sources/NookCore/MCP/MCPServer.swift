@@ -10,6 +10,7 @@ import Foundation
 public final class MCPServer {
     public static let supportedProtocolVersions = ["2025-06-18", "2025-03-26", "2024-11-05"]
     static let maxBodyCharacters = 20_000
+    static let outdatedMessage = "Nook was updated; reconnect the nook MCP server. (This server started before the update and can't read the store anymore. In Claude Code: /mcp, then reconnect nook, or restart the session.)"
     static let downloadTimeout: TimeInterval = 120
 
     let repo: MailRepository
@@ -121,6 +122,7 @@ public final class MCPServer {
         guard isEnabled() else {
             return toolError("Nook's MCP access is turned off. The user can turn it on in Nook → Settings → Integrations.")
         }
+        guard !repo.storeIsNewerThanThisCode else { return toolError(Self.outdatedMessage) }
         do {
             switch name {
             case "list_accounts": return toolResult(listAccounts())
