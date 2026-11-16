@@ -130,6 +130,57 @@ struct AttachmentReadingTests {
         context.closePDF()
         return data as Data
     }
+
+    /// Shaped like the Outlook email that hid four tables from an agent: multipart/related, an HTML body that shows the
+    /// images with cid:, Outlook's image00N names, a signature logo and a real attachment beside them. The app draws
+    /// the images inside the email, but the plain-text body an agent gets can't, so the MCP must list and serve them.
+    @Test func imagesTheEmailShowsInlineCanBeListedAndRead() async throws {
+        func encoded(_ s: String) -> String { MIMEBuilder.base64URL(Data(s.utf8)) }
+        func image(_ n: Int, _ type: String) -> GmailMessagePart {
+            GmailMessagePart(
+                partId: "0.\(n)", mimeType: type, filename: "image00\(n).\(type == "image/png" ? "png" : "jpg")",
+                headers: [
+                    GmailHeader(name: "Content-Type", value: "\(type); name=\"image00\(n)\""),
+                    GmailHeader(name: "Content-Disposition", value: "inline; filename=\"image00\(n)\""),
+                    GmailHeader(name: "Content-ID", value: "<image00\(n).png@01DC5612.ABCDEF00>"),
+                ],
+                body: GmailBody(size: 80_000 + n, attachmentId: "inline-\(n)")
+            )
+        }
+        let html = "<p>Please see Schedule FA:</p>" + (1...5).map { "<img src=\"cid:image00\($0).png@01DC5612.ABCDEF00\">" }.joined()
+        let gmailMessage = GmailMessage(
+            id: "ca", threadId: "T", labelIds: ["INBOX"], internalDate: "1700000000000",
+            payload: GmailMessagePart(partId: "", mimeType: "multipart/mixed", headers: [GmailHeader(name: "Subject", value: "IT return")], parts: [
+                GmailMessagePart(partId: "0", mimeType: "multipart/related", parts: [
+                    GmailMessagePart(partId: "0.0", mimeType: "multipart/alternative", parts: [
+                        GmailMessagePart(partId: "0.0.0", mimeType: "text/plain", body: GmailBody(data: encoded("Please see Schedule FA:\r\n[cid:image002.png@01DC5612.ABCDEF00]"))),
+                        GmailMessagePart(partId: "0.0.1", mimeType: "text/html", body: GmailBody(data: encoded(html))),
+                    ]),
+                    image(1, "image/jpeg"), image(2, "image/png"), image(3, "image/png"), image(4, "image/png"), image(5, "image/png"),
+                ]),
+                GmailMessagePart(partId: "1", mimeType: "application/pdf", filename: "Computation.pdf", body: GmailBody(size: 400_000, attachmentId: "pdf")),
+            ])
+        )
+        let message = MIMEParser.message(from: gmailMessage, account: Self.account)
+        #expect(message.listedAttachments.map(\.filename) == ["Computation.pdf"], "the app still shows only the real attachment under the email")
+        try repo.upsert([message])
+
+        let request: [String: Any] = ["jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": ["name": "get_thread", "arguments": ["account": Self.account, "thread_id": "T"]]]
+        let line = String(decoding: try JSONSerialization.data(withJSONObject: request), as: UTF8.self)
+        let raw = try #require(server.handle(line: line))
+        let response = try #require(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let thread = try #require((response["result"] as? [String: Any])?["structuredContent"] as? [String: Any])
+        let listed = try #require((thread["messages"] as? [[String: Any]])?.first { $0["id"] as? String == "ca" }?["attachments"] as? [[String: Any]])
+        #expect(listed.map { $0["filename"] as? String } == ["image001.jpg", "image002.png", "image003.png", "image004.png", "image005.png", "Computation.pdf"])
+        #expect(listed.map { $0["inline"] as? Bool ?? false } == [true, true, true, true, true, false])
+
+        let table = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3])
+        await gmail.setAttachment("inline-3", data: table)
+        let read = try read("image003.png", message: "ca")
+        #expect(!read.isError)
+        let path = try #require(read.result["path"] as? String)
+        #expect(FileManager.default.contents(atPath: path) == table)
+    }
 }
 
 @Suite("Storing attachments")

@@ -223,8 +223,14 @@ public final class MCPServer {
                     "body": body.count > Self.maxBodyCharacters ? String(body.prefix(Self.maxBodyCharacters)) + "\n[truncated]" : body,
                     "unread": message.isUnread,
                     "tags": repo.tags(account: account, messageId: message.id),
-                    // Details only. get_attachment reads a file.
-                    "attachments": message.listedAttachments.map { ["filename": $0.filename, "part_id": $0.partId, "type": $0.mimeType, "size": $0.size] as [String: Any] },
+                    // Details only. get_attachment reads a file. Images the email shows inline (a pasted table, a
+                    // screenshot) are listed too, marked inline: the plain-text body can't show them, so this is the
+                    // only way an agent can read them.
+                    "attachments": message.attachments.map { attachment -> [String: Any] in
+                        var listed: [String: Any] = ["filename": attachment.filename, "part_id": attachment.partId, "type": attachment.mimeType, "size": attachment.size]
+                        if attachment.isInline { listed["inline"] = true }
+                        return listed
+                    },
                 ]
             },
         ]
@@ -239,7 +245,7 @@ public final class MCPServer {
             throw RPCError.invalidParams("No message \(messageId) in thread \(threadId).")
         }
         let partId = arguments["part_id"] as? String
-        let matches = message.listedAttachments.filter { $0.filename == filename && (partId == nil || $0.partId == partId) }
+        let matches = message.attachments.filter { $0.filename == filename && (partId == nil || $0.partId == partId) }
         guard let attachment = matches.first else { throw RPCError.invalidParams("No attachment \(filename) on message \(messageId).") }
         guard matches.count == 1 else {
             let parts = matches.map(\.partId).joined(separator: ", ")
