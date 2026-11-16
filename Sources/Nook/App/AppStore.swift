@@ -100,6 +100,9 @@ final class AppStore: ObservableObject {
     /// The quick agenda (t) is open over whatever's on screen.
     @Published var showAgenda = false
     @Published var draft: Draft?
+    /// A newer version of the open draft, saved by Claude while it was open. The sheet takes it, or asks first
+    /// when you've changed something.
+    @Published var draftUpdate: Draft?
     /// Recipient suggestions for the To and Cc fields. Rebuilt in the background each time a message is started.
     @Published private(set) var contactBook = ContactBook()
     private var contactsLoading = false
@@ -1407,6 +1410,18 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Demo only: Claude saves a new version of the open draft, which arrives as update_draft's link does.
+    func demoClaudeUpdatesDraft() {
+        guard isDemo, let open = draft, let messageId = open.gmailDraftMessageId,
+              var message = repo.message(account: open.from, id: messageId) else { return }
+        message.id = messageId + "-v2"
+        message.bodyText = "Hi team,\n\nNew version: the lakeside venue is cheaper and has rooms for everyone."
+        message.bodyHTML = message.bodyHTML.isEmpty ? "" : #"<div dir="ltr">Hi team,<br><br>New version: <a href="https://example.com/lakeside">the lakeside venue</a> is cheaper and has rooms for everyone.</div>"#
+        try? repo.upsert([message])
+        handle(NookURL.draft(account: open.from, messageId: message.id, draftId: "demo-saved-draft").url)
+        print("demo: claude-updated-draft"); fflush(stdout)
+    }
+
     /// Demo only: the soonest reminder goes off in a couple of seconds, to check what happens when one does.
     func demoWakeSoon() {
         guard isDemo, let next = repo.threads(ThreadQuery(mailbox: .reminders)).first?.reminder else { return }
@@ -1468,7 +1483,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Opens a Gmail draft to finish. A reply draft stays in its conversation.
-    private func openGmailDraft(_ row: ThreadSummary) {
+    private func openGmailDraft(_ row: ThreadSummary, draftId: String? = nil) {
         // Saving rewrites the draft, so its attachments have to be known first or they'd be dropped.
         if !isDemo, repo.message(account: row.account, id: row.latestMessageId)?.attachments.isEmpty == true,
            !repo.messagesMissingAttachments(account: row.account, threadId: row.threadId).isEmpty {
@@ -1478,21 +1493,45 @@ final class AppStore: ObservableObject {
                 if repo.messagesMissingAttachments(account: row.account, threadId: row.threadId).contains(row.latestMessageId) {
                     return showToast("Couldn't load this draft's attachments. Try again in a moment.", isError: true)
                 }
-                openGmailDraft(row)
+                openGmailDraft(row, draftId: draftId)
             }
             return
         }
         guard let message = repo.message(account: row.account, id: row.latestMessageId) else { return }
-        let isReply = !repo.threadMessages(account: row.account, threadId: message.threadId).isEmpty
+        let opened = gmailDraft(message, account: row.account, draftId: draftId)
+        openDraft(opened)
+        guard draft?.id == opened.id, draftId == nil else { return }
+        // Opened from Drafts: learn its Gmail id in the background, so a change Claude makes to it while it's open
+        // can be recognised (the message id changes with every save).
+        let sync = sync
+        Task {
+            guard let id = try? await sync.service(for: row.account).draftID(messageId: message.id), draft?.id == opened.id else { return }
+            openDraftGmailId = (opened.id, id)
+        }
+    }
+
+    /// The Gmail id of the draft open in the sheet, if known.
+    private var openDraftGmailId: (draft: UUID, id: String)?
+
+    private func gmailDraftId(of open: Draft) -> String? {
+        open.gmailDraftId ?? openDraftGmailId.flatMap { $0.draft == open.id ? $0.id : nil }
+    }
+
+    /// A saved Gmail draft, ready to edit.
+    private func gmailDraft(_ message: MailMessage, account: String, draftId: String?) -> Draft {
+        let isReply = !repo.threadMessages(account: account, threadId: message.threadId).isEmpty
         let references = message.references.trimmingCharacters(in: .whitespaces)
-        openDraft(Draft(
-            from: row.account, to: message.to, cc: message.cc, subject: message.subject, body: message.bodyText,
+        var draft = Draft(
+            from: account, to: message.to, cc: message.cc, subject: message.subject, body: message.bodyText,
             threadId: isReply ? message.threadId : nil,
             inReplyTo: references.split(separator: " ").last.map(String.init),
             references: references.isEmpty ? nil : references,
             gmailDraftMessageId: message.id,
-            attachments: message.listedAttachments.map { OutgoingAttachment(forwarding: $0, account: row.account, messageId: message.id) }
-        ))
+            attachments: message.listedAttachments.map { OutgoingAttachment(forwarding: $0, account: account, messageId: message.id) }
+        )
+        draft.gmailDraftId = draftId
+        RichText.keepFormatting(of: message, in: &draft)
+        return draft
     }
 
     /// Saves to Gmail: over the draft this was opened from, or as a new draft.
@@ -1505,7 +1544,9 @@ final class AppStore: ObservableObject {
                 let service = try await sync.service(for: draft.from)
                 let raw = try await rawMessage(draft, fromName: name)
                 if let messageId = draft.gmailDraftMessageId {
-                    guard let id = try await service.draftID(messageId: messageId) else {
+                    var id = gmailDraftId(of: draft)
+                    if id == nil { id = try await service.draftID(messageId: messageId) }
+                    guard let id else {
                         return showToast("That draft was sent or deleted elsewhere.", isError: true)
                     }
                     try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
@@ -1564,7 +1605,9 @@ final class AppStore: ObservableObject {
                 let raw = try await rawMessage(draft, fromName: name)
                 // A Gmail draft is sent as that draft, so it leaves Drafts everywhere instead of lingering there.
                 let threadId: String?
-                if let messageId = draft.gmailDraftMessageId, let id = try await service.draftID(messageId: messageId) {
+                var draftId = gmailDraftId(of: draft)
+                if draftId == nil, let messageId = draft.gmailDraftMessageId { draftId = try await service.draftID(messageId: messageId) }
+                if let messageId = draft.gmailDraftMessageId, let id = draftId {
                     try await service.updateDraft(id: id, raw: raw, threadId: draft.threadId)
                     threadId = try await service.sendDraft(id: id) ?? draft.threadId
                     try? repo.deleteMessages(account: draft.from, ids: [messageId])
@@ -1626,26 +1669,30 @@ final class AppStore: ObservableObject {
                 return showToast("That conversation isn't on this Mac.", isError: true)
             }
             open(thread)
-        case let .draft(account, messageId):
-            openSavedDraft(account: account, messageId: messageId)
+        case let .draft(account, messageId, draftId):
+            openSavedDraft(account: account, messageId: messageId, draftId: draftId)
         }
     }
 
     /// Opens a Gmail draft another tool just saved. It reaches this Mac with the next sync, so this asks for one and waits.
-    private func openSavedDraft(account: String, messageId: String, attempt: Int = 0) {
+    private func openSavedDraft(account: String, messageId: String, draftId: String?, attempt: Int = 0) {
         if let open = draft {
-            // Never replace what someone is writing. Their window may hold an older copy of this same draft.
+            // The draft Claude changed is the one open: show the new version (the sheet asks first if you've edited it).
+            if let draftId, open.from == account, gmailDraftId(of: open) == draftId {
+                return refreshOpenDraft(open, account: account, messageId: messageId, draftId: draftId)
+            }
+            // Never replace what someone is writing.
             let same = open.gmailDraftMessageId != nil && open.from == account
             bringForward()
             return showToast(same
-                ? "Claude changed a draft. Close the message you're writing to see the new version."
-                : "Claude saved a draft. It's in Drafts when you finish this message.")
+                ? "A draft was updated. Close the message you're writing to see the new version."
+                : "A new draft was saved. It's in Drafts when you finish this message.")
         }
         if let message = repo.message(account: account, id: messageId) {
             return openGmailDraft(ThreadSummary(
                 account: account, threadId: message.threadId, latestMessageId: message.id, fromName: "", fromEmail: "",
                 subject: message.subject, snippet: "", date: message.date, messageCount: 1, isUnread: false, isStarred: false, tags: []
-            ))
+            ), draftId: draftId)
         }
         guard attempt < 20 else {
             bringForward()
@@ -1661,18 +1708,43 @@ final class AppStore: ObservableObject {
                 step?.end()
                 Diagnostics.LinkTiming.mark(fetched ? "fetched the draft" : "couldn't fetch the draft")
                 if fetched, repo.message(account: account, id: messageId) != nil {
-                    return openSavedDraft(account: account, messageId: messageId, attempt: 1)
+                    return openSavedDraft(account: account, messageId: messageId, draftId: draftId, attempt: 1)
                 }
                 // Not there yet (or offline): fall back to syncing and looking again.
                 syncNow()
-                openSavedDraft(account: account, messageId: messageId, attempt: 1)
+                openSavedDraft(account: account, messageId: messageId, draftId: draftId, attempt: 1)
             }
             return
         }
         Task {
             try? await Task.sleep(for: .seconds(attempt < 5 ? 0.5 : 1.5))
             if attempt == 6 { syncNow() }
-            openSavedDraft(account: account, messageId: messageId, attempt: attempt + 1)
+            openSavedDraft(account: account, messageId: messageId, draftId: draftId, attempt: attempt + 1)
+        }
+    }
+
+    /// Loads the version Claude just saved of the draft that's open, and hands it to the sheet.
+    private func refreshOpenDraft(_ open: Draft, account: String, messageId: String, draftId: String) {
+        bringForward()
+        let sync = sync
+        Task {
+            if repo.message(account: account, id: messageId) == nil {
+                _ = try? await sync.fetchNow(account: account, ids: [messageId])
+            }
+            // Saving rewrites the draft, so its files have to be known too.
+            if repo.messagesMissingAttachments(account: account, threadId: repo.message(account: account, id: messageId)?.threadId ?? "").contains(messageId) {
+                try? await sync.fillInAttachments(account: account, ids: [messageId])
+            }
+            guard let message = repo.message(account: account, id: messageId) else {
+                return showToast("This draft was updated, but the new version didn't load. Close it and open it from Drafts.", isError: true)
+            }
+            // Closed meanwhile: open the new version instead.
+            guard draft?.id == open.id else {
+                return draft == nil ? openSavedDraft(account: account, messageId: messageId, draftId: draftId) : ()
+            }
+            var newer = gmailDraft(message, account: account, draftId: draftId)
+            newer.id = open.id
+            draftUpdate = newer
         }
     }
 

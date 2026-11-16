@@ -211,11 +211,29 @@ public struct Draft: Identifiable, Hashable, Sendable {
     public var references: String?
     /// The Gmail draft this was opened from, by its message id. Sending sends that draft; saving updates it.
     public var gmailDraftMessageId: String?
+    /// The Gmail draft's own id, when known. Unlike the message id, it survives the draft being updated.
+    public var gmailDraftId: String?
     public var attachments: [OutgoingAttachment]
     /// The message being replied to or forwarded. Kept out of the editor and added below what you write when sending.
     public var quoted: String = ""
     /// Bring the conversation back to the inbox this long after sending, unless someone has replied by then.
     public var followUpAfter: TimeInterval?
+    /// What you wrote, formatted (links, bold, lists). Set, the message goes out as HTML with `body` as its plain-text twin.
+    public var bodyHTML: String?
+    /// The quoted message as HTML, from a rich draft opened from Gmail. Otherwise the HTML quote is made from `quoted`.
+    public var quotedHTML: String?
+
+    /// The HTML part, for a formatted draft: your text, then the quote.
+    public var fullHTML: String? {
+        guard let bodyHTML else { return nil }
+        return RichText.document(body: bodyHTML, quote: quotedHTML ?? (quoted.isEmpty ? nil : RichText.quoteHTML(fromPlain: quoted)))
+    }
+
+    /// Sets a formatted body, and the plain text that goes with it.
+    public mutating func setHTML(_ html: String) {
+        bodyHTML = html
+        body = RichText.plainText(fromHTML: html)
+    }
 
     /// What's sent: your text, then the quoted message.
     public var fullBody: String {

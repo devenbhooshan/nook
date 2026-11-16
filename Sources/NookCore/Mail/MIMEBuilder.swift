@@ -27,16 +27,28 @@ public enum MIMEBuilder {
         }
 
         headers.append("MIME-Version: 1.0")
-        let textHeaders = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"]
         let text = base64Lines(Data(draft.fullBody.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n").utf8))
+        // The message itself: text, or for a formatted draft, text and HTML as alternatives.
+        var content = (["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64"], text)
+        if let html = draft.fullHTML {
+            let alternative = "\(boundary)-alt"
+            let parts = [
+                "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + text,
+                "Content-Type: text/html; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" + base64Lines(Data(html.utf8)),
+            ]
+            content = (
+                ["Content-Type: multipart/alternative; boundary=\"\(alternative)\""],
+                parts.map { "--\(alternative)\r\n\($0)\r\n" }.joined() + "--\(alternative)--\r\n"
+            )
+        }
 
         let files = draft.attachments.compactMap { attachment in attachment.data.map { (attachment, $0) } }
         guard !files.isEmpty else {
-            return (headers + textHeaders).joined(separator: "\r\n") + "\r\n\r\n" + text
+            return (headers + content.0).joined(separator: "\r\n") + "\r\n\r\n" + content.1
         }
 
         headers.append("Content-Type: multipart/mixed; boundary=\"\(boundary)\"")
-        var parts = [textHeaders.joined(separator: "\r\n") + "\r\n\r\n" + text]
+        var parts = [content.0.joined(separator: "\r\n") + "\r\n\r\n" + content.1]
         for (attachment, data) in files {
             let name = singleLine(attachment.filename).replacingOccurrences(of: "\"", with: "'")
             let type = singleLine(attachment.mimeType).filter { !$0.isWhitespace && $0 != ";" }

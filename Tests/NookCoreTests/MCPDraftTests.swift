@@ -76,6 +76,11 @@ struct MCPDraftTests {
         // Every write opens the draft in Nook; nothing is sent.
         #expect(opened.urls.compactMap(NookURL.init).allSatisfy { if case .draft = $0 { true } else { false } })
         #expect(opened.urls.count == 4)
+        // Each link names the same draft, so Nook can refresh it when it's already open.
+        let draftIds = opened.urls.compactMap(NookURL.init).map { link -> String? in
+            if case let .draft(_, _, draftId) = link { draftId } else { nil }
+        }
+        #expect(draftIds == Array(repeating: id, count: 4))
         #expect(await gmail.sent.isEmpty)
     }
 

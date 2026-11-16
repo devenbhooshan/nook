@@ -23,7 +23,7 @@ enum DemoData {
             "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), "left": (123, "\u{F702}"), "right": (124, "\u{F703}"), "space": (49, " "),
             "pagedown": (121, "\u{F72D}"), "pageup": (116, "\u{F72C}"), "home": (115, "\u{F729}"), "end": (119, "\u{F72B}"),
             "j": (38, "j"), "k": (40, "k"), "esc": (53, "\u{1B}"),
-            "return": (36, "\r"), "tab": (48, "\t"),
+            "return": (36, "\r"), "tab": (48, "\t"), "delete": (51, "\u{7F}"),
         ]
         // US key codes, so typed text and single-key shortcuts can be checked.
         let letters: [String: UInt16] = [
@@ -170,6 +170,11 @@ enum DemoData {
         }
         if let flag = arguments.firstIndex(of: "--to"), arguments.indices.contains(flag + 1) {
             store.handle(NookURL.compose(from: nil, to: arguments[flag + 1], cc: "", subject: "", body: "").url)
+        }
+        if let flag = arguments.firstIndex(of: "--claude-updates-draft"), arguments.indices.contains(flag + 1) {
+            // `--claude-updates-draft <seconds>`: Claude saves a new version of the open draft, as update_draft does.
+            let delay = Double(arguments[flag + 1]) ?? 3
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { store.demoClaudeUpdatesDraft() }
         }
         if arguments.contains("--palette") { store.openPalette() }
         if arguments.contains("--wake-soon") { store.demoWakeSoon() }
@@ -373,6 +378,13 @@ enum DemoData {
         ]
 
         try? repo.upsert(samples.map(\.0))
+        // A saved draft, for the Drafts list.
+        var draft = message("d1", work, from: ("Sam Rivera", work), subject: "Offsite venue options",
+                            body: "Hi team,\n\nHere are the two venues I liked.", hoursAgo: 2, inbox: false,
+                            html: #"<div dir="ltr"><div>Hi team,</div><div><br></div><div>Here are the two venues I liked: <a href="https://example.com/lakeside">Lakeside Lodge</a> and <b>Hilltop Inn</b>.</div><ul><li>Both have rooms for everyone</li><li>Lakeside is <i>cheaper</i></li></ul></div>"#,
+                            to: "team@acme.example").0
+        draft.labels = [SystemLabel.draft]
+        try? repo.upsert([draft])
         for (message, tags) in samples {
             try? repo.setAutoTags(tags, account: message.account, messageId: message.id)
         }
@@ -403,8 +415,14 @@ struct OfflineGmail: GmailService {
     func trashThread(id: String) async throws {}
     func untrashThread(id: String) async throws {}
     func send(raw: String, threadId: String?) async throws -> String? { threadId }
-    func draftID(messageId: String) async throws -> String? { nil }
-    func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef { GmailDraftRef(id: id, messageId: id) }
+    func draftID(messageId: String) async throws -> String? { messageId == "d1" ? "demo-saved-draft" : nil }
+    func updateDraft(id: String, raw: String, threadId: String?) async throws -> GmailDraftRef {
+        // The saved message, so a check can see exactly what Gmail would get.
+        let message = String(decoding: MIMEParser.decodeBase64URL(raw) ?? Data(), as: UTF8.self)
+        print("demo: draft-updated id=\(id)\n\(message)")
+        fflush(stdout)
+        return GmailDraftRef(id: id, messageId: id)
+    }
     func drafts() async throws -> [GmailDraftRef] { [] }
     func deleteDraft(id: String) async throws {}
     func draft(id: String) async throws -> GmailDraftRef? { nil }

@@ -156,6 +156,9 @@ struct NookURLTests {
         NookURL.reply(account: "me@x.com", threadId: "18c2f", body: "Sounds good + thanks", all: false),
         NookURL.reply(account: "me@x.com", threadId: "18c2f", body: "", all: true),
         NookURL.open(account: "me@x.com", threadId: "18c2f"),
+        NookURL.draft(account: "me@x.com", messageId: "19a7", draftId: "r-38310"),
+        // Links from servers that predate the draft id still open the draft.
+        NookURL.draft(account: "me@x.com", messageId: "19a7"),
     ])
     func roundTrips(link: NookURL) {
         #expect(link.url.scheme == "nook")

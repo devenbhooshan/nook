@@ -37,7 +37,7 @@ extension MCPServer {
             throw RPCError.invalidParams("No thread \(threadId) in \(account).")
         }
         var draft = ReplyComposer.draft((arguments["reply_all"] as? Bool ?? false) ? .replyAll : .reply, to: latest, account: account)
-        draft.body = arguments["body"] as? String ?? ""
+        guard try setBody(arguments, on: &draft) else { throw RPCError.invalidParams("`body` or `html` is required.") }
         draft.attachments = try files(arguments["attachments"])
         return try create(draft)
     }
@@ -48,12 +48,34 @@ extension MCPServer {
         guard repo.accounts().contains(where: { $0.email == from }) else {
             throw RPCError.invalidParams(from.isEmpty ? "No account in Nook." : "\(from) isn't an account in Nook.")
         }
-        let draft = Draft(
+        var draft = Draft(
             from: from, to: to, cc: arguments["cc"] as? String ?? "",
-            subject: arguments["subject"] as? String ?? "", body: arguments["body"] as? String ?? "",
+            subject: arguments["subject"] as? String ?? "",
             attachments: try files(arguments["attachments"])
         )
+        try setBody(arguments, on: &draft)
         return try create(draft)
+    }
+
+    /// `html` makes a formatted draft (links, bold, lists) whose plain-text part is made from it; `body` alone is
+    /// plain text. Returns whether either was given.
+    @discardableResult
+    func setBody(_ arguments: [String: Any], on draft: inout Draft) throws -> Bool {
+        if let html = arguments["html"] as? String, !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard RichText.isEditable(html) else {
+                throw RPCError.invalidParams(
+                    "`html` can use only these tags, so the user can edit it in Nook: \(RichText.editableTags.sorted().joined(separator: ", ")). Send just the body, without <html> or <body>."
+                )
+            }
+            draft.setHTML(html)
+            return true
+        }
+        if let body = arguments["body"] as? String {
+            draft.body = body
+            draft.bodyHTML = nil
+            return true
+        }
+        return false
     }
 
     func listDrafts(_ arguments: [String: Any]) throws -> [String: Any] {
@@ -88,6 +110,9 @@ extension MCPServer {
         var result = summary(ref, message: message, account: account)
         let body = message.bodyText
         result["body"] = body.count > Self.maxBodyCharacters ? String(body.prefix(Self.maxBodyCharacters)) + "\n[truncated]" : body
+        var formatted = Draft(from: account)
+        RichText.keepFormatting(of: message, in: &formatted)
+        if let html = formatted.bodyHTML, html.count <= Self.maxBodyCharacters { result["html"] = html }
         result["note"] = "This is the draft as saved in Gmail. Edits the user hasn't saved in Nook yet aren't included."
         return result
     }
@@ -100,11 +125,11 @@ extension MCPServer {
         if let to = arguments["to"] as? String { draft.to = to }
         if let cc = arguments["cc"] as? String { draft.cc = cc }
         if let subject = arguments["subject"] as? String { draft.subject = subject }
-        if let body = arguments["body"] as? String {
-            draft.body = body
+        if try setBody(arguments, on: &draft) {
             // A reply keeps the message it answers below the new text, as Nook does.
             if draft.threadId != nil, let latest = repo.threadMessages(account: account, threadId: message.threadId).last {
                 draft.quoted = ReplyComposer.draft(.reply, to: latest, account: account).quoted
+                draft.quotedHTML = nil
             }
         }
         if let remove = arguments["remove_attachments"] as? [String] {
@@ -131,7 +156,7 @@ extension MCPServer {
         let raw = MIMEBuilder.gmailRaw(draft, fromName: name(of: account))
         let threadId = draft.threadId
         let updated = try wait { try await gmail.updateDraft(id: ref.id, raw: raw, threadId: threadId) }
-        openURL(NookURL.draft(account: account, messageId: updated.messageId).url)
+        openURL(NookURL.draft(account: account, messageId: updated.messageId, draftId: updated.id).url)
         return saved(updated, draft: draft, account: account, status: "The draft is updated and open in Nook for the user to review. It has not been sent.")
     }
 
@@ -176,7 +201,7 @@ extension MCPServer {
         let threadId = draft.threadId
         let ref = try wait { try await gmail.createDraft(raw: raw, threadId: threadId) }
         createdDrafts.insert(account: draft.from, draftId: ref.id)
-        openURL(NookURL.draft(account: draft.from, messageId: ref.messageId).url)
+        openURL(NookURL.draft(account: draft.from, messageId: ref.messageId, draftId: ref.id).url)
         return saved(ref, draft: draft, account: draft.from, status: "A draft is saved in Gmail and open in Nook for the user to review. It has not been sent. Change it with update_draft, not by drafting again.")
     }
 
@@ -225,7 +250,7 @@ extension MCPServer {
     /// The draft as Nook opens it to edit, with its files still in Gmail.
     private func editable(_ message: MailMessage, account: String) -> Draft {
         let references = message.references.trimmingCharacters(in: .whitespaces)
-        return Draft(
+        var draft = Draft(
             from: account, to: message.to, cc: message.cc, subject: message.subject, body: message.bodyText,
             threadId: references.isEmpty ? nil : message.threadId,
             inReplyTo: references.split(separator: " ").last.map(String.init),
@@ -233,6 +258,8 @@ extension MCPServer {
             gmailDraftMessageId: message.id,
             attachments: message.listedAttachments.map { OutgoingAttachment(forwarding: $0, account: account, messageId: message.id) }
         )
+        RichText.keepFormatting(of: message, in: &draft)
+        return draft
     }
 
     /// Reads files to attach. Paths must be absolute and point at files, not folders.
@@ -280,10 +307,11 @@ extension MCPServer {
                     "account": ["type": "string"],
                     "thread_id": ["type": "string"],
                     "body": ["type": "string", "description": "The reply text, plain text."],
+                    "html": ["type": "string", "description": "Instead of `body`, for formatting: links (<a href>), <b>, <i>, <ul>/<ol> with <li>, <p>, <br>. Just the body, no <html> or <body>. The plain-text part is made from it, with each link's address after its text."],
                     "reply_all": ["type": "boolean", "description": "Copy everyone on the thread. Defaults to false."],
                     "attachments": ["type": "array", "items": ["type": "string"], "description": "Absolute paths of files on this Mac to attach. 25 MB in all at most."],
                 ],
-                "required": ["account", "thread_id", "body"],
+                "required": ["account", "thread_id"],
             ],
             "annotations": ["readOnlyHint": false, "destructiveHint": false, "idempotentHint": false, "openWorldHint": true],
         ],
@@ -301,6 +329,7 @@ extension MCPServer {
                     "cc": ["type": "string"],
                     "subject": ["type": "string"],
                     "body": ["type": "string", "description": "Plain text."],
+                    "html": ["type": "string", "description": "Instead of `body`, for formatting: links (<a href>), <b>, <i>, <ul>/<ol> with <li>, <p>, <br>. Just the body, no <html> or <body>. The plain-text part is made from it, with each link's address after its text."],
                     "from": ["type": "string", "description": "Which account to send from. Defaults to the first."],
                     "attachments": ["type": "array", "items": ["type": "string"], "description": "Absolute paths of files on this Mac to attach. 25 MB in all at most."],
                 ],
@@ -326,7 +355,7 @@ extension MCPServer {
             "name": "get_draft",
             "title": "Read a draft",
             "description": """
-            A draft's full text and attached files (name, type, size), as saved in Gmail, including the user's own edits once they've saved them. \
+            A draft's full text (and `html`, when it's formatted) and attached files (name, type, size), as saved in Gmail, including the user's own edits once they've saved them. \
             Read a file on it with get_attachment, using the draft's thread_id, `message_id` and the filename.
             """,
             "inputSchema": [
@@ -344,14 +373,15 @@ extension MCPServer {
             "title": "Change a draft",
             "description": """
             Changes a draft in place, keeping its draft_id, and opens it in Nook for review. Never sends. Fields you leave out stay as they are. \
-            `body` replaces the text; a reply keeps the quoted original below it. Read the draft with get_draft first so you don't undo the user's edits.
+            `body` or `html` replaces the text; a reply keeps the quoted original below it. A formatted draft stays formatted when you change only other fields. Read the draft with get_draft first so you don't undo the user's edits.
             """,
             "inputSchema": [
                 "type": "object",
                 "properties": [
                     "account": ["type": "string"],
                     "draft_id": ["type": "string"],
-                    "body": ["type": "string", "description": "The new text, plain text."],
+                    "body": ["type": "string", "description": "The new text, plain text. Replaces any formatting."],
+                    "html": ["type": "string", "description": "Instead of `body`, for formatting: links (<a href>), <b>, <i>, <ul>/<ol> with <li>, <p>, <br>. Just the body, no <html> or <body>. The plain-text part is made from it, with each link's address after its text."],
                     "to": ["type": "string", "description": "Comma-separated recipients."],
                     "cc": ["type": "string"],
                     "subject": ["type": "string"],

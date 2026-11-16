@@ -9,8 +9,9 @@ public enum NookURL: Equatable, Sendable {
     case reply(account: String, threadId: String, body: String, all: Bool)
     /// `nook://open?account=&thread=`
     case open(account: String, threadId: String)
-    /// `nook://draft?account=&message=`: a saved Gmail draft, by the message it holds now.
-    case draft(account: String, messageId: String)
+    /// `nook://draft?account=&message=&draft=`: a saved Gmail draft, by the message it holds now. The draft id stays
+    /// the same when the draft is updated (the message id doesn't), so it tells Nook which open draft changed.
+    case draft(account: String, messageId: String, draftId: String? = nil)
 
     public static let scheme = "nook"
 
@@ -35,7 +36,7 @@ public enum NookURL: Equatable, Sendable {
             self = .open(account: account, threadId: thread)
         case "draft":
             guard let account = query["account"], let message = query["message"], !account.isEmpty, !message.isEmpty else { return nil }
-            self = .draft(account: account, messageId: message)
+            self = .draft(account: account, messageId: message, draftId: query["draft"].flatMap { $0.isEmpty ? nil : $0 })
         default:
             return nil
         }
@@ -60,9 +61,10 @@ public enum NookURL: Equatable, Sendable {
         case let .open(account, threadId):
             components.host = "open"
             items = [URLQueryItem(name: "account", value: account), URLQueryItem(name: "thread", value: threadId)]
-        case let .draft(account, messageId):
+        case let .draft(account, messageId, draftId):
             components.host = "draft"
             items = [URLQueryItem(name: "account", value: account), URLQueryItem(name: "message", value: messageId)]
+            if let draftId { items.append(URLQueryItem(name: "draft", value: draftId)) }
         }
         components.queryItems = items
         // URLComponents leaves "+" alone, which some parsers read as a space.

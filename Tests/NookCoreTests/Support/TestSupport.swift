@@ -152,33 +152,34 @@ actor FakeGmail: GmailService {
             return (headers, pieces.dropFirst().joined(separator: "\r\n\r\n"))
         }
         func bytes(_ base64: String) -> Data { Data(base64Encoded: base64.replacingOccurrences(of: "\r\n", with: "")) ?? Data() }
-        let (headers, body) = split(Substring(text))
-        let type = headers.first { $0.name == "Content-Type" }?.value ?? ""
-        var parts: [GmailMessagePart] = []
-        if let range = type.range(of: "boundary=\"") {
-            let boundary = String(type[range.upperBound...].prefix { $0 != "\"" })
-            let chunks = body.components(separatedBy: "--\(boundary)").dropFirst().filter { !$0.hasPrefix("--") }
-            for (index, chunk) in chunks.enumerated() {
-                let (partHeaders, partBody) = split(Substring(chunk.trimmingCharacters(in: .whitespacesAndNewlines)))
-                let data = bytes(partBody)
-                let partType = partHeaders.first { $0.name == "Content-Type" }?.value ?? ""
-                if index == 0 {
-                    parts.append(GmailMessagePart(partId: "0", mimeType: "text/plain", body: GmailBody(data: MIMEBuilder.base64URL(data))))
-                } else {
-                    let disposition = partHeaders.first { $0.name == "Content-Disposition" }?.value ?? ""
-                    let name = disposition.components(separatedBy: "filename=\"").last?.replacingOccurrences(of: "\"", with: "") ?? "file"
-                    let attachmentId = "\(id)-file\(index)"
-                    attachmentData[attachmentId] = data
-                    parts.append(GmailMessagePart(
-                        partId: "\(index)", mimeType: String(partType.prefix { $0 != ";" }), filename: name,
-                        headers: partHeaders, body: GmailBody(size: data.count, attachmentId: attachmentId)
-                    ))
+        // The MIME tree as Gmail keeps it: multipart parts nest (text and HTML alternatives inside a mixed message).
+        func part(headers: [GmailHeader], body: String, partId: String) -> GmailMessagePart {
+            let type = headers.first { $0.name == "Content-Type" }?.value ?? "text/plain"
+            let mimeType = String(type.prefix { $0 != ";" })
+            if let range = type.range(of: "boundary=\"") {
+                let boundary = String(type[range.upperBound...].prefix { $0 != "\"" })
+                let chunks = body.components(separatedBy: "--\(boundary)").dropFirst().filter { !$0.hasPrefix("--") }
+                let children = chunks.enumerated().map { index, chunk in
+                    let (childHeaders, childBody) = split(Substring(chunk.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    return part(headers: childHeaders, body: childBody, partId: partId.isEmpty ? "\(index)" : "\(partId).\(index)")
                 }
+                return GmailMessagePart(partId: partId, mimeType: mimeType, headers: headers, parts: children)
             }
+            let data = bytes(body)
+            let disposition = headers.first { $0.name == "Content-Disposition" }?.value ?? ""
+            guard disposition.hasPrefix("attachment") else {
+                return GmailMessagePart(partId: partId, mimeType: mimeType, headers: headers, body: GmailBody(data: MIMEBuilder.base64URL(data)))
+            }
+            let name = disposition.components(separatedBy: "filename=\"").last?.replacingOccurrences(of: "\"", with: "") ?? "file"
+            let attachmentId = "\(id)-file\(partId)"
+            attachmentData[attachmentId] = data
+            return GmailMessagePart(
+                partId: partId, mimeType: mimeType, filename: name,
+                headers: headers, body: GmailBody(size: data.count, attachmentId: attachmentId)
+            )
         }
-        let payload = parts.isEmpty
-            ? GmailMessagePart(mimeType: "text/plain", headers: headers, body: GmailBody(data: MIMEBuilder.base64URL(bytes(body))))
-            : GmailMessagePart(mimeType: "multipart/mixed", headers: headers, parts: parts)
+        let (headers, body) = split(Substring(text))
+        let payload = part(headers: headers, body: body, partId: "")
         draftClock += 60
         messages[id] = GmailMessage(id: id, threadId: threadId, labelIds: [SystemLabel.draft], internalDate: String(draftClock * 1000), payload: payload)
     }

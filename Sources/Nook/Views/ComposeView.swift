@@ -17,8 +17,12 @@ struct ComposeView: View {
     @State private var pasteMonitor: Any?
     /// Where ⌘V reads from. The demo swaps in its own, so tests leave the real clipboard alone.
     static var pasteboard = NSPasteboard.general
-    /// What the draft looked like when it opened, to tell whether discarding would lose anything.
-    private let original: Draft
+    /// What the draft looked like when it opened (or was last updated elsewhere), to tell whether discarding would lose anything.
+    @State private var original: Draft
+    /// A version saved elsewhere (by an assistant over MCP) while you had unsaved changes, waiting for you to pick one.
+    @State private var newerVersion: Draft?
+    /// Shown for a moment after a newer version replaces what's on screen.
+    @State private var updatedElsewhere = false
     @FocusState private var focus: Field?
     @StateObject private var suggestions = RecipientSuggestions()
 
@@ -26,7 +30,7 @@ struct ComposeView: View {
 
     init(draft: Draft) {
         _draft = State(initialValue: draft)
-        original = draft
+        _original = State(initialValue: draft)
         _showCc = State(initialValue: !draft.cc.isEmpty)
     }
 
@@ -101,16 +105,41 @@ struct ComposeView: View {
             }
             field("Subject", text: $draft.subject, focus: .subject) { EmptyView() }
 
-            TextEditor(text: $draft.body)
-                .font(.system(size: 14.5))
-                .lineSpacing(5)
-                .scrollContentBackground(.hidden)
-                .focused($focus, equals: .body)
-                .padding(.horizontal, 15)
+            if newerVersion != nil {
+                newerVersionBanner
+            } else if updatedElsewhere {
+                Label("Draft updated", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .transition(.opacity)
+            }
+
+            if draft.bodyHTML != nil {
+                // A formatted draft (links, bold, lists): edited as it will look, sent as HTML with a text twin.
+                RichTextEditor(
+                    html: Binding(get: { draft.bodyHTML ?? "" }, set: { draft.setHTML($0) }),
+                    focusOnAppear: hasRecipients
+                )
+                .id(draft.gmailDraftMessageId)
+                .padding(.horizontal, 20)
                 .padding(.top, 14)
                 .padding(.bottom, 6)
+            } else {
+                TextEditor(text: $draft.body)
+                    .font(.system(size: 14.5))
+                    .lineSpacing(5)
+                    .scrollContentBackground(.hidden)
+                    .focused($focus, equals: .body)
+                    .padding(.horizontal, 15)
+                    .padding(.top, 14)
+                    .padding(.bottom, 6)
+            }
 
-            if !draft.quoted.isEmpty {
+            // A formatted reply carries its quote as HTML, below what you write; it isn't folded into the editor.
+            if !draft.quoted.isEmpty, draft.bodyHTML == nil {
                 quotedSection
             }
             if !draft.attachments.isEmpty {
@@ -173,7 +202,7 @@ struct ComposeView: View {
                 }
                 Button("Save Draft") { store.saveDraft(draft) }
                     .keyboardShortcut("s", modifiers: .command)
-                    .disabled(!canSaveDraft)
+                    .disabled(!canSaveDraft || newerVersion != nil)
                     .help("Save to Drafts in Gmail (⌘S)")
                 Button {
                     store.send(draft)
@@ -185,7 +214,7 @@ struct ComposeView: View {
                 }
                 .keyboardShortcut(.return, modifiers: .command)
                 .buttonStyle(.borderedProminent)
-                .disabled(!canSend)
+                .disabled(!canSend || newerVersion != nil)
             }
             .padding(.leading, 14)
             .padding(.trailing, 20)
@@ -234,6 +263,14 @@ struct ComposeView: View {
         .onChange(of: draft.cc) { suggest() }
         .onChange(of: focus) { suggest() }
         .onChange(of: store.contactBook) { suggest() }
+        .onChange(of: store.draftUpdate) { _, newer in
+            guard let newer, newer.id == draft.id else { return }
+            store.draftUpdate = nil
+            // Nothing of yours to lose: show the new version. Otherwise ask, and hold Save and Send until you've chosen,
+            // so the older text can't overwrite the change by accident.
+            Diagnostics.LinkTiming.mark(hasEdits ? "sheet asked before replacing edits" : "sheet took the new version")
+            if hasEdits { newerVersion = newer } else { useNewerVersion(newer) }
+        }
         .onDisappear {
             suggestions.clear()
             if let pasteMonitor { NSEvent.removeMonitor(pasteMonitor) }
@@ -315,6 +352,54 @@ struct ComposeView: View {
         draft.followUpAfter = index + 1 < choices.count ? choices[index + 1] : nil
     }
 
+    private var newerVersionBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Theme.accent)
+            Text("This draft was changed while you were editing it.")
+                .font(.system(size: 12.5))
+            Spacer()
+            Button("Keep Mine", action: keepMine)
+                .help("Keep your text. Saving replaces the new version.")
+            Button("Use New Version") { newerVersion.map(useNewerVersion) }
+                .buttonStyle(.borderedProminent)
+                .help("Replace your unsaved changes with the new version")
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    private func useNewerVersion(_ newer: Draft) {
+        var next = newer
+        next.followUpAfter = draft.followUpAfter
+        draft = next
+        original = next
+        newerVersion = nil
+        if !next.cc.isEmpty { showCc = true }
+        withAnimation { updatedElsewhere = true }
+        Task {
+            try? await Task.sleep(for: .seconds(4))
+            withAnimation { updatedElsewhere = false }
+        }
+    }
+
+    /// Keeps your text, now as changes to the new version, so saving updates the right draft and its files.
+    private func keepMine() {
+        guard let newer = newerVersion else { return }
+        draft.gmailDraftMessageId = newer.gmailDraftMessageId
+        draft.gmailDraftId = newer.gmailDraftId
+        // Files still in Gmail now live on the new message.
+        draft.attachments = draft.attachments.map { attachment in
+            guard case .gmail = attachment.source, let moved = newer.attachments.first(where: { $0.filename == attachment.filename }) else { return attachment }
+            return moved
+        }
+        original = newer
+        newerVersion = nil
+    }
+
     private var title: String {
         if draft.inReplyTo != nil { return "Reply" }
         if draft.subject.hasPrefix("Fwd:") { return "Forward" }
@@ -323,6 +408,7 @@ struct ComposeView: View {
 
     private var hasEdits: Bool {
         draft.to != original.to || draft.cc != original.cc || draft.subject != original.subject || draft.body != original.body
+            || draft.bodyHTML != original.bodyHTML
             || draft.attachments.map(\.id) != original.attachments.map(\.id)
     }
 

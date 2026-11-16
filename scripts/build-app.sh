@@ -16,7 +16,23 @@ dev+=(${extra[@]+"${extra[@]}"})
 swift build -c "$configuration" ${dev[@]+"${dev[@]}"}
 bin="$(swift build -c "$configuration" ${dev[@]+"${dev[@]}"} --show-bin-path)"
 
-app="build/Nook.app"
+# One build at a time: two at once would delete and copy over each other's half-signed app.
+mkdir -p build
+lock="build/.build-app.lock"
+until mkdir "$lock" 2>/dev/null; do
+    # A lock left by a build that died (its process is gone) doesn't count.
+    if [[ -f "$lock/pid" ]] && ! kill -0 "$(cat "$lock/pid")" 2>/dev/null; then rm -rf "$lock"; continue; fi
+    echo "waiting for another build-app.sh to finish..." >&2
+    sleep 1
+done
+echo $$ > "$lock/pid"
+
+# Built and signed beside the real one, then swapped in whole. Nothing (a running Nook, Claude Code starting
+# nook-mcp) ever sees a half-copied or unsigned app, which Keychain would treat as a stranger and ask about.
+final="build/Nook.app"
+staging="build/.Nook.app.building"
+app="$staging"
+trap 'rm -rf "$staging" "$lock"' EXIT
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Nook" "$app/Contents/MacOS/Nook"
@@ -84,6 +100,26 @@ bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' Resources/In
 codesign --force ${signing[@]+"${signing[@]}"} --sign "$identity" "$app/Contents/Frameworks/SQLCipher.framework" >/dev/null
 codesign --force ${signing[@]+"${signing[@]}"} --identifier "$bundle_id" --sign "$identity" "$app/Contents/MacOS/nook-mcp" >/dev/null
 codesign --force ${signing[@]+"${signing[@]}"} --entitlements Resources/Nook.entitlements --sign "$identity" "$app" >/dev/null
+
+# Keychain trusts the signature's designated requirement. With a certificate, that's the identifier and team,
+# the same on every build. A requirement that's just a hash means the signing didn't take, and every rebuild
+# would ask for the password again: stop rather than install that.
+if [[ "$identity" != "-" ]]; then
+    for code in "$app" "$app/Contents/MacOS/nook-mcp"; do
+        requirement="$(codesign -d -r- "$code" 2>&1 | grep designated || true)"
+        if [[ "$requirement" != *"identifier \"$bundle_id\""* || "$requirement" == *cdhash* ]]; then
+            echo "error: $code isn't signed with a stable identity ($requirement)" >&2
+            exit 1
+        fi
+    done
+fi
+codesign --verify --strict --deep "$app"
+
+rm -rf "$final.old"
+[[ -d "$final" ]] && mv "$final" "$final.old"
+mv "$app" "$final"
+rm -rf "$final.old"
+app="$final"
 
 if [[ "$identity" == "-" ]]; then
     echo "Built $app (ad hoc: macOS may ask for Keychain access after each rebuild; run scripts/setup-signing.sh once to stop that)"
