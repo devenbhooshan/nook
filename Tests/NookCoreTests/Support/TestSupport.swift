@@ -66,6 +66,9 @@ actor FakeGmail: GmailService {
         self.historyId = historyId
     }
 
+    /// Puts a message in the mailbox without a history record, like one saved moments ago.
+    func setMessage(_ message: GmailMessage) { messages[message.id] = message }
+
     func delete(_ id: String, historyId: String) {
         messages[id] = nil
         pendingHistory.append(GmailHistoryRecord(id: historyId, messagesDeleted: [.init(message: GmailMessageRef(id: id))]))

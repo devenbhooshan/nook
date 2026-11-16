@@ -35,6 +35,20 @@ struct SyncEngineTests {
         #expect(changes.count >= 2)
     }
 
+    /// A draft another tool just saved opens from one fetch, not by waiting for a sync to find it in the history.
+    @Test func fetchingOneMessageNowStoresItWithoutASync() async throws {
+        try await engine.sync(account)
+        let history = await gmail.historyCalls
+        // Saved in Gmail, and not yet in the history a sync reads.
+        await gmail.setMessage(gmailMessage(id: "d1", thread: "A", labels: [SystemLabel.draft], subject: "Re: plans", body: "Draft text"))
+
+        try await engine.fetchNow(account: account, ids: ["d1"])
+
+        let draft = try #require(repo.message(account: account, id: "d1"))
+        #expect(draft.bodyText == "Draft text" && draft.labels.contains(SystemLabel.draft))
+        #expect(await gmail.historyCalls == history, "no sync involved")
+    }
+
     @Test func draftsAreStoredAndAccountsFromBeforeGetTheirDraftsOnce() async throws {
         let gmail = FakeGmail(messages: [gmailMessage(id: "1"), gmailMessage(id: "old-draft", labels: ["DRAFT"])])
         let engine = SyncEngine(repo: repo, makeService: { _ in gmail })

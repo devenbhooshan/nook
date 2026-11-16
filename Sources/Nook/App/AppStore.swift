@@ -1437,7 +1437,18 @@ final class AppStore: ObservableObject {
             return
         }
         draft = new
+        Diagnostics.LinkTiming.finish("opened the sheet")
+        if bringForwardWithNextDraft { bringForward() }
         refreshContacts()
+    }
+
+    /// Set while a `nook://` draft link waits for its draft, so Nook comes forward with the sheet, not before it.
+    private var bringForwardWithNextDraft = false
+
+    private func bringForward() {
+        bringForwardWithNextDraft = false
+        NSApp.activate()
+        Diagnostics.LinkTiming.mark("came forward")
     }
 
     private func refreshContacts() {
@@ -1592,7 +1603,14 @@ final class AppStore: ObservableObject {
     /// something for you to look at. Drafts still need you to press Send.
     func handle(_ url: URL) {
         guard let link = NookURL(url) else { return }
-        NSApp.activate()
+        Diagnostics.LinkTiming.arrive()
+        // A saved draft may need fetching first. Coming forward then would show the inbox until it arrives, so
+        // that link brings Nook forward when the sheet opens (or with a message saying why it didn't).
+        if case .draft = link {
+            bringForwardWithNextDraft = true
+        } else {
+            bringForward()
+        }
         switch link {
         case let .compose(from, to, cc, subject, body):
             let sender = from.flatMap { account(for: $0)?.email } ?? scope ?? accounts.first?.email ?? ""
@@ -1618,6 +1636,7 @@ final class AppStore: ObservableObject {
         if let open = draft {
             // Never replace what someone is writing. Their window may hold an older copy of this same draft.
             let same = open.gmailDraftMessageId != nil && open.from == account
+            bringForward()
             return showToast(same
                 ? "Claude changed a draft. Close the message you're writing to see the new version."
                 : "Claude saved a draft. It's in Drafts when you finish this message.")
@@ -1628,8 +1647,28 @@ final class AppStore: ObservableObject {
                 subject: message.subject, snippet: "", date: message.date, messageCount: 1, isUnread: false, isStarred: false, tags: []
             ))
         }
-        guard attempt < 20 else { return showToast("The draft is saved in Gmail. It'll show in Drafts after the next sync.") }
-        if attempt == 0 { syncNow() }
+        guard attempt < 20 else {
+            bringForward()
+            return showToast("The draft is saved in Gmail. It'll show in Drafts after the next sync.")
+        }
+        if attempt == 0 {
+            // Fetch just this draft: one request, where waiting for a sync took seconds.
+            let sync = sync
+            Task {
+                let step = Diagnostics.step("fetch a draft from a link")
+                Diagnostics.LinkTiming.mark("started fetching the draft")
+                let fetched = (try? await sync.fetchNow(account: account, ids: [messageId])) != nil
+                step?.end()
+                Diagnostics.LinkTiming.mark(fetched ? "fetched the draft" : "couldn't fetch the draft")
+                if fetched, repo.message(account: account, id: messageId) != nil {
+                    return openSavedDraft(account: account, messageId: messageId, attempt: 1)
+                }
+                // Not there yet (or offline): fall back to syncing and looking again.
+                syncNow()
+                openSavedDraft(account: account, messageId: messageId, attempt: 1)
+            }
+            return
+        }
         Task {
             try? await Task.sleep(for: .seconds(attempt < 5 ? 0.5 : 1.5))
             if attempt == 6 { syncNow() }
@@ -1640,6 +1679,8 @@ final class AppStore: ObservableObject {
     // MARK: Toasts
 
     func showToast(_ message: String, isError: Bool = false, undo: (() -> Void)? = nil) {
+        // A draft link waiting to come forward with its sheet shows its message instead, so it must be seen.
+        if bringForwardWithNextDraft { bringForward() }
         let toast = Toast(message: message, canUndo: undo != nil, isError: isError)
         undoAction = undo.map { (toast.id, $0) }
         withAnimation(.snappy(duration: 0.2)) { self.toast = toast }

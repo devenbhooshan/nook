@@ -142,6 +142,30 @@ struct PerformanceTests {
         #expect(elapsed < .milliseconds(50 * Self.machineAllowance), "20-message batch took \(elapsed)")
     }
 
+    /// A draft Claude saved took seconds to open: storing one message rebuilt its conversation's tags by reading every
+    /// tag in the account. Years of tagged mail must not slow down storing one email.
+    @Test func storingOneMessageIgnoresTheRestOfTheAccountsTags() throws {
+        // Encrypted and on disk, like the app's store: the slow plan looked up every tagged message, and each lookup
+        // is a page read and a decrypt.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("nook-perf-tags-\(UUID().uuidString).sqlite")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let repo = try MailStore.open(path: url.path, secrets: MemorySecretStore()).repository
+        try repo.addAccount(email: "me@example.com", name: "Me")
+        try repo.db.run("""
+        WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 199999)
+        INSERT INTO messages(account, id, thread_id, from_email, subject, snippet, date, labels)
+        SELECT 'me@example.com', 'old' || i, 'thread' || (i / 3), 'sender' || (i % 500) || '@example.com',
+               'Subject ' || i, printf('%.200c', 'x'), 1700000000 + i, ',INBOX,' FROM n;
+        INSERT INTO message_tags(account, message_id, tag) SELECT account, id, 'Finance' FROM messages;
+        """)
+        var round = 0
+        let elapsed = try measure {
+            round += 1
+            try repo.upsert([.fixture(id: "draft-\(round)", thread: "T", subject: "Re: plans")])
+        }
+        #expect(elapsed < Self.budget, "storing one message took \(elapsed) with 200,000 tagged messages in the account")
+    }
+
     /// Closing an email froze the app for seconds: the main thread's list query waited behind background reads.
     @MainActor @Test func theMainThreadNeverWaitsForBackgroundReads() async throws {
         let repo = repo

@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import os
 
 /// Dev builds only (`NOOK_DEV=1 ./scripts/build-app.sh`): times every key press and click from the moment it happens
 /// until Nook is idle again, notes the slow steps inside it, and catches the main thread freezing. Mail → Copy
@@ -51,6 +52,27 @@ final class Diagnostics: @unchecked Sendable {
     }
 
     static func step(_ name: String) -> Step? { isEnabled ? Step(name) : nil }
+
+    /// Times a `nook://` link from arrival to what you see: when Nook came forward, and when the sheet opened.
+    /// Dev builds only; read with `log show --predicate 'subsystem == "com.devenbhooshan.nook" AND category == "links"'`.
+    enum LinkTiming {
+        private static let log = Logger(subsystem: "com.devenbhooshan.nook", category: "links")
+        nonisolated(unsafe) private static var arrived: TimeInterval?
+
+        static func arrive() { if isEnabled { arrived = ProcessInfo.processInfo.systemUptime } }
+
+        static func mark(_ what: String) {
+            guard isEnabled, let arrived else { return }
+            let ms = Int((ProcessInfo.processInfo.systemUptime - arrived) * 1000)
+            log.notice("link \(what, privacy: .public) after \(ms) ms")
+        }
+
+        /// The last mark for this link, so a draft opened later by hand isn't timed against it.
+        static func finish(_ what: String) {
+            mark(what)
+            arrived = nil
+        }
+    }
 
     /// Where you are when an action starts (reader, list, search…), filled in by the store. Called on the main thread.
     var context: @MainActor () -> String = { "" }

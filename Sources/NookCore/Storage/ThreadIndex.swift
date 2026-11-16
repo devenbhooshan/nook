@@ -117,8 +117,8 @@ enum ThreadIndex {
             try db.execute("""
             \(keysCTE) INSERT OR IGNORE INTO thread_tags(account, thread_id, tag)
             SELECT m.account, m.thread_id, t.tag
-            FROM k JOIN messages m ON m.account = k.account AND m.thread_id = k.thread_id
-            JOIN message_tags t ON t.account = m.account AND t.message_id = m.id
+            FROM k CROSS JOIN messages m ON m.account = k.account AND m.thread_id = k.thread_id
+            CROSS JOIN message_tags t ON t.account = m.account AND t.message_id = m.id
             WHERE \(alive)
             """, arguments)
             try db.execute("""

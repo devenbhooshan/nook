@@ -345,6 +345,12 @@ public actor SyncEngine {
         return report
     }
 
+    /// Fetches these messages now and stores them, without waiting for a sync. For a draft another tool just saved:
+    /// a sync would find it too, but only after reading the account's history, and one may already be running.
+    public func fetchNow(account: String, ids: [String]) async throws {
+        _ = try await fetchAndStore(ids, account: account, service: try service(for: account))
+    }
+
     // MARK: Attachments
 
     /// Fetches these messages again to learn their attachments, keeping the labels stored here, which may hold
