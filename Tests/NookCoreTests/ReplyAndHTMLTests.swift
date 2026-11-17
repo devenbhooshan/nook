@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import WebKit
 @testable import NookCore
 
 @Suite("ReplyComposer")
@@ -91,5 +92,71 @@ struct EmailHTMLTests {
     ])
     func detectsRemoteContent(html: String, expected: Bool) {
         #expect(EmailHTML.containsRemoteContent(html) == expected)
+    }
+}
+
+/// Renders documents in WebKit and reads the colour each link ends up with.
+@Suite("EmailHTML links")
+@MainActor
+struct EmailHTMLLinkTests {
+    /// The Supergrow review email (sent with Loops): its stylesheet resets every link to the colour of the text.
+    static let loopsBody = """
+    <html><head><style type="text/css">
+    a { text-decoration: none; color: inherit; }
+    @media (prefers-color-scheme: dark) { a { color: inherit; } }
+    .button a { color: rgb(1, 2, 3); }
+    a.brand { color: rgb(4, 5, 6); }
+    </style></head><body><div style="color: rgb(0, 0, 0)">
+    <a id="plain" href="https://app.supergrow.ai/review/x">Open the post to review and approve it</a>
+    <a id="inline" href="https://x.example" style="color: rgb(200, 0, 0)">red</a>
+    <span class="button"><a id="classed" href="https://x.example">button</a></span>
+    <a id="own" class="brand" href="https://x.example">brand</a>
+    <a id="anchor" name="top">not a link</a>
+    </div></body></html>
+    """
+
+    @Test func linksGetALinkColourUnlessTheEmailColoursThemItself() async throws {
+        var message = MailMessage.fixture(id: "1")
+        message.bodyHTML = Self.loopsBody
+        let colours = try await Self.linkColours(in: EmailHTML.document(for: message, allowRemoteContent: false))
+        #expect(colours["plain"] == "rgb(11, 87, 208)")    // #0b57d0
+        #expect(colours["inline"] == "rgb(200, 0, 0)")
+        #expect(colours["classed"] == "rgb(1, 2, 3)")
+        #expect(colours["own"] == "rgb(4, 5, 6)")
+        #expect(colours["anchor"] == "rgb(0, 0, 0)")
+    }
+
+    static func linkColours(in document: String) async throws -> [String: String] {
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let loaded = LoadWaiter()
+        webView.navigationDelegate = loaded
+        webView.loadHTMLString(document, baseURL: nil)
+        try await loaded.wait()
+        let result = try await webView.evaluateJavaScript(
+            "JSON.stringify(Object.fromEntries([...document.querySelectorAll('a[id]')].map(a => [a.id, getComputedStyle(a).color])))"
+        )
+        return try JSONDecoder().decode([String: String].self, from: Data((result as? String ?? "{}").utf8))
+    }
+
+    final class LoadWaiter: NSObject, WKNavigationDelegate {
+        private var continuation: CheckedContinuation<Void, Error>?
+        private var finished = false
+
+        func wait() async throws {
+            if finished { return }
+            try await withCheckedThrowingContinuation { continuation = $0 }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            finished = true
+            continuation?.resume()
+            continuation = nil
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            finished = true
+            continuation?.resume(throwing: error)
+            continuation = nil
+        }
     }
 }

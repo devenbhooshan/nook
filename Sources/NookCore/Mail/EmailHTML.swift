@@ -90,5 +90,12 @@ public enum EmailHTML {
     body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; overflow-wrap: anywhere; }
     img { max-width: 100%; height: auto; }
     table { max-width: 100% !important; }
+    /* Links look like links. Templates (Loops, for one) reset "a { color: inherit; text-decoration: none }", which
+       leaves links as black as the text around them. a[href] outranks a bare "a" rule, but a colour the email gives
+       a link itself (inline, or with a class) still wins: those match at least as specifically and come later. */
+    a[href] { color: \(linkColor); }
     """
+
+    /// Gmail's link blue. HTML mail sits on a white sheet in both appearances, so this doesn't follow dark mode.
+    static let linkColor = "#0b57d0"
 }
