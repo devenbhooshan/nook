@@ -176,6 +176,21 @@ enum DemoData {
             let delay = Double(arguments[flag + 1]) ?? 3
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { store.demoClaudeUpdatesDraft() }
         }
+        if arguments.contains("--needs-event-permission"), let account = store.accounts.last?.email {
+            // As if this account signed in before Nook asked to add events.
+            store.cannotAddEvents = [account]
+        }
+        if arguments.contains("--invite"), let account = store.accounts.last?.email {
+            // An invite as create_event hands it over: tomorrow 19:00–19:30 in Kolkata, with a Meet link.
+            let zone = TimeZone(identifier: "Asia/Kolkata")!
+            var day = Calendar.current
+            day.timeZone = zone
+            let start = day.date(bySettingHour: 19, minute: 0, second: 0, of: day.date(byAdding: .day, value: 1, to: Date())!)!
+            store.handle(NookURL.event(EventInvite(
+                account: account, title: "Walkthrough with Greg", start: start, end: start.addingTimeInterval(30 * 60),
+                timeZone: zone.identifier, attendees: "greg@esri.example", notes: "Signals, leads and next steps."
+            )).url)
+        }
         if arguments.contains("--palette") { store.openPalette() }
         if arguments.contains("--wake-soon") { store.demoWakeSoon() }
         if let flag = arguments.firstIndex(of: "--alert-click"), arguments.indices.contains(flag + 1) {
@@ -554,6 +569,21 @@ extension DemoData {
             return Dictionary(uniqueKeysWithValues: accounts.map { ($0, DemoCalendar(account: $0, needsPermission: true) as CalendarSource) })
         }
         return [account: DemoCalendar(account: account, needsPermission: false)]
+    }
+}
+
+extension DemoData {
+    /// Prints the invite it was asked to create, so a check can see exactly what Google would get.
+    static let calendarWriter: CalendarWriter = DemoCalendarWriter()
+}
+
+private struct DemoCalendarWriter: CalendarWriter {
+    func insert(_ invite: EventInvite) async throws -> CreatedEvent {
+        let body = GoogleCalendar.eventBody(invite)
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]), as: UTF8.self)
+        print("demo: invite-sent \(json)")
+        fflush(stdout)
+        return CreatedEvent(link: nil, meetLink: invite.addMeet ? "https://meet.google.com/abc-defg-hij" : nil)
     }
 }
 

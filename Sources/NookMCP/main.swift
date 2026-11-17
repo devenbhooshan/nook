@@ -34,6 +34,11 @@ do {
             return GmailClient(tokens: provider)
         }
     )
+    server.grantedScopes = { secrets.tokens(for: $0)?.scopes }
+    server.makeCalendar = { email in
+        guard let tokens = secrets.tokens(for: email) else { throw GmailError.notSignedIn(email) }
+        return GoogleCalendar(account: email, tokens: OAuthTokenProvider(email: email, tokens: tokens, config: GoogleClientConfig.load(from: secrets), store: secrets))
+    }
     server.run()
 } catch {
     // stdout belongs to the protocol, so report problems on stderr.

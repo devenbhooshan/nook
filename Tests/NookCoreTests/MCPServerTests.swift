@@ -66,7 +66,7 @@ struct MCPServerTests {
     @Test func listsToolsWithSchemas() throws {
         let result = try #require(try call("tools/list")["result"] as? [String: Any])
         let tools = try #require(result["tools"] as? [[String: Any]])
-        #expect(tools.map { $0["name"] as? String } == ["list_accounts", "list_tags", "search_threads", "get_thread", "get_attachment", "draft_reply", "compose_draft", "list_drafts", "get_draft", "update_draft", "delete_draft"])
+        #expect(tools.map { $0["name"] as? String } == ["list_accounts", "list_tags", "search_threads", "get_thread", "get_attachment", "draft_reply", "compose_draft", "list_drafts", "get_draft", "update_draft", "delete_draft", "create_event", "list_events"])
         #expect(tools.allSatisfy { ($0["inputSchema"] as? [String: Any])?["type"] as? String == "object" })
     }
 

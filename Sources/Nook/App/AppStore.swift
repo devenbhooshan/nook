@@ -103,6 +103,35 @@ final class AppStore: ObservableObject {
     /// A newer version of the open draft, saved by Claude while it was open. The sheet takes it, or asks first
     /// when you've changed something.
     @Published var draftUpdate: Draft?
+    /// A calendar invite an assistant prepared, open for you to check and send.
+    @Published var eventInvite: EventInvite?
+    /// Accounts Google refused an event for (their sign-in predates the permission). Demo: ones set up that way.
+    @Published var cannotAddEvents: Set<String> = []
+    /// Bumped when a sign-in's permissions become known, so views that show them look again.
+    @Published private(set) var grantsChecked = 0
+
+    /// Whether this account's sign-in lets Nook add calendar events: false says to sign in again, nil isn't known yet.
+    func canAddEvents(_ email: String) -> Bool? {
+        _ = grantsChecked
+        if cannotAddEvents.contains(email) { return false }
+        if isDemo { return true }
+        return secrets.tokens(for: email)?.allows(GoogleOAuth.calendarEventsScope)
+    }
+
+    /// Sign-ins saved before Nook kept their permissions get them now, with an ordinary token refresh, so Settings
+    /// can say which accounts need to sign in again (for adding events) before anyone tries.
+    private func learnGrantedScopes() {
+        guard !isDemo else { return }
+        let config = googleConfig
+        for email in accounts.map(\.email) where !signedOutAccounts.contains(email) {
+            guard let tokens = secrets.tokens(for: email), tokens.scopes == nil else { continue }
+            let provider = OAuthTokenProvider(email: email, tokens: tokens, config: config, store: secrets)
+            Task {
+                _ = try? await provider.accessToken(forceRefresh: true)
+                grantsChecked += 1
+            }
+        }
+    }
     /// Recipient suggestions for the To and Cc fields. Rebuilt in the background each time a message is started.
     @Published private(set) var contactBook = ContactBook()
     private var contactsLoading = false
@@ -253,6 +282,7 @@ final class AppStore: ObservableObject {
         moveAttachmentsOutOfStore()
         AttachmentFiles.clearTemporaryFiles()
         loadAccounts()
+        learnGrantedScopes()
         upgradeTagsIfNeeded()
         tags = repo.tags()
         reload()
@@ -788,6 +818,8 @@ final class AppStore: ObservableObject {
                     DispatchQueue.main.async { NSWorkspace.shared.open(url) }
                 })
                 try secrets.setTokens(result.tokens, for: result.email)
+                cannotAddEvents.remove(result.email)
+                grantsChecked += 1
                 try repo.addAccount(email: result.email, name: result.name)
                 await sync.forget(result.email)
                 expiredSignIns.remove(result.email)
@@ -1671,6 +1703,12 @@ final class AppStore: ObservableObject {
             open(thread)
         case let .draft(account, messageId, draftId):
             openSavedDraft(account: account, messageId: messageId, draftId: draftId)
+        case let .event(invite):
+            guard account(for: invite.account) != nil else { return showToast("\(invite.account) isn't an account in Nook.", isError: true) }
+            guard eventInvite == nil, draft == nil else {
+                return showToast("Finish what's open first, then ask again for the invite to \(invite.title).", isError: true)
+            }
+            eventInvite = invite
         }
     }
 
@@ -1745,6 +1783,36 @@ final class AppStore: ObservableObject {
             var newer = gmailDraft(message, account: account, draftId: draftId)
             newer.id = open.id
             draftUpdate = newer
+        }
+    }
+
+    /// Send Invite: creates the event on the account's calendar, and Google emails the guests. The only way an
+    /// invite an assistant prepared reaches anyone.
+    func sendInvite(_ invite: EventInvite) {
+        eventInvite = nil
+        showToast("Sending the invite…")
+        let writer: CalendarWriter
+        if isDemo {
+            writer = DemoData.calendarWriter
+        } else {
+            guard let tokens = secrets.tokens(for: invite.account) else {
+                eventInvite = invite
+                return showToast("Sign in to \(invite.account) again in Settings → Accounts, then send.", isError: true)
+            }
+            writer = GoogleCalendar(account: invite.account, tokens: OAuthTokenProvider(email: invite.account, tokens: tokens, config: googleConfig, store: secrets))
+        }
+        Task {
+            do {
+                let made = try await writer.insert(invite)
+                let guests = invite.guestEmails.count == 1 ? invite.guestEmails[0] : "\(invite.guestEmails.count) guests"
+                showToast(invite.guestEmails.isEmpty ? "Added to your calendar" : "Invite sent to \(guests)\(made.meetLink == nil ? "" : ", with a Meet link")")
+                calendar.refresh()
+            } catch {
+                if case CalendarWriteError.needsPermission = error { cannotAddEvents.insert(invite.account) }
+                // Back to the sheet, so nothing typed is lost; it says what to do when it's the permission.
+                if eventInvite == nil, draft == nil { eventInvite = invite }
+                showToast("Couldn't send the invite: \(error.localizedDescription)", isError: true)
+            }
         }
     }
 

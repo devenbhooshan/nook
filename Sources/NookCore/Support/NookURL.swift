@@ -12,6 +12,9 @@ public enum NookURL: Equatable, Sendable {
     /// `nook://draft?account=&message=&draft=`: a saved Gmail draft, by the message it holds now. The draft id stays
     /// the same when the draft is updated (the message id doesn't), so it tells Nook which open draft changed.
     case draft(account: String, messageId: String, draftId: String? = nil)
+    /// `nook://event?account=&title=&start=&end=&tz=&attendees=&meet=1&notes=`: an invite to review and send.
+    /// Times are ISO 8601 with their offset.
+    case event(EventInvite)
 
     public static let scheme = "nook"
 
@@ -37,8 +40,32 @@ public enum NookURL: Equatable, Sendable {
         case "draft":
             guard let account = query["account"], let message = query["message"], !account.isEmpty, !message.isEmpty else { return nil }
             self = .draft(account: account, messageId: message, draftId: query["draft"].flatMap { $0.isEmpty ? nil : $0 })
+        case "event":
+            let zone = TimeZone(identifier: query["tz"] ?? "") ?? .current
+            guard let account = query["account"], !account.isEmpty,
+                  let start = query["start"].flatMap({ EventInvite.date($0, in: zone) }),
+                  let end = query["end"].flatMap({ EventInvite.date($0, in: zone) }) else { return nil }
+            self = .event(EventInvite(
+                account: account, title: query["title"] ?? "", start: start, end: end, timeZone: zone.identifier,
+                attendees: query["attendees"] ?? "", addMeet: query["meet"] == "1", notes: query["notes"] ?? ""
+            ))
         default:
             return nil
+        }
+    }
+
+    public static func == (lhs: NookURL, rhs: NookURL) -> Bool {
+        switch (lhs, rhs) {
+        case let (.event(a), .event(b)):
+            // An invite's id is only for showing it; two links for the same invite are equal.
+            var b = b
+            b.id = a.id
+            return a == b
+        case let (.compose(a1, a2, a3, a4, a5), .compose(b1, b2, b3, b4, b5)): return (a1, a2, a3, a4, a5) == (b1, b2, b3, b4, b5)
+        case let (.reply(a1, a2, a3, a4), .reply(b1, b2, b3, b4)): return (a1, a2, a3, a4) == (b1, b2, b3, b4)
+        case let (.open(a1, a2), .open(b1, b2)): return (a1, a2) == (b1, b2)
+        case let (.draft(a1, a2, a3), .draft(b1, b2, b3)): return (a1, a2, a3) == (b1, b2, b3)
+        default: return false
         }
     }
 
@@ -65,6 +92,16 @@ public enum NookURL: Equatable, Sendable {
             components.host = "draft"
             items = [URLQueryItem(name: "account", value: account), URLQueryItem(name: "message", value: messageId)]
             if let draftId { items.append(URLQueryItem(name: "draft", value: draftId)) }
+        case let .event(invite):
+            components.host = "event"
+            let zone = TimeZone(identifier: invite.timeZone) ?? .current
+            items = [
+                URLQueryItem(name: "account", value: invite.account), URLQueryItem(name: "title", value: invite.title),
+                URLQueryItem(name: "start", value: EventInvite.string(invite.start, in: zone)),
+                URLQueryItem(name: "end", value: EventInvite.string(invite.end, in: zone)),
+                URLQueryItem(name: "tz", value: zone.identifier), URLQueryItem(name: "attendees", value: invite.attendees),
+                URLQueryItem(name: "meet", value: invite.addMeet ? "1" : "0"), URLQueryItem(name: "notes", value: invite.notes),
+            ]
         }
         components.queryItems = items
         // URLComponents leaves "+" alone, which some parsers read as a space.

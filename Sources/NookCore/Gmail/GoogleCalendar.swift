@@ -106,7 +106,8 @@ public protocol CalendarSource: Sendable {
     func events(from start: Date, to end: Date) async throws -> [CalendarEvent]
 }
 
-/// Read-only Google Calendar: the calendars you have switched on in Google Calendar, and their events.
+/// Google Calendar: the calendars you have switched on in Google Calendar, and their events. It writes only to
+/// create an invite you've sent from Nook (see `CalendarInvite.swift`).
 public struct GoogleCalendar: CalendarSource {
     private let account: String
     private let transport: HTTPTransport
@@ -158,12 +159,21 @@ public struct GoogleCalendar: CalendarSource {
     }
 
     private func get(_ path: String, query: [URLQueryItem]) async throws -> Data {
+        try await send("GET", path, query: query, body: nil)
+    }
+
+    func send(_ method: String, _ path: String, query: [URLQueryItem], body: Data?) async throws -> Data {
         // `path` is already encoded.
         var components = URLComponents(string: baseURL.absoluteString + path)!
         if !query.isEmpty { components.queryItems = query }
         var refreshed = false
         while true {
             var request = URLRequest(url: components.url!)
+            request.httpMethod = method
+            if let body {
+                request.httpBody = body
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            }
             request.setValue("Bearer \(try await tokens.accessToken(forceRefresh: refreshed))", forHTTPHeaderField: "Authorization")
             let (data, response) = try await transport.send(request)
             switch response.statusCode {

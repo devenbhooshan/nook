@@ -73,7 +73,11 @@ public enum GoogleOAuth {
         "https://www.googleapis.com/auth/directory.readonly",
         // Your schedule, read-only, for the calendar view and the agenda.
         "https://www.googleapis.com/auth/calendar.readonly",
+        // Adding an event when you press Send Invite on one an assistant prepared. Accounts signed in before
+        // this was asked for keep working; Settings and the invite ask them to sign in again before sending.
+        calendarEventsScope,
     ]
+    public static let calendarEventsScope = "https://www.googleapis.com/auth/calendar.events"
     static let authorizationEndpoint = URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!
     static let tokenEndpoint = URL(string: "https://oauth2.googleapis.com/token")!
     static let userInfoEndpoint = URL(string: "https://openidconnect.googleapis.com/v1/userinfo")!
@@ -143,7 +147,10 @@ public enum GoogleOAuth {
             "client_secret": config.clientSecret,
         ], transport: transport)
         guard let refreshToken = response.refresh_token else { throw OAuthError.missingRefreshToken }
-        return TokenSet(accessToken: response.access_token, refreshToken: refreshToken, expiry: Date().addingTimeInterval(response.expires_in ?? 3600))
+        return TokenSet(
+            accessToken: response.access_token, refreshToken: refreshToken, expiry: Date().addingTimeInterval(response.expires_in ?? 3600),
+            scopes: response.grantedScopes
+        )
     }
 
     public static func refresh(_ tokens: TokenSet, config: GoogleClientConfig, transport: HTTPTransport = URLSession.shared) async throws -> TokenSet {
@@ -156,7 +163,8 @@ public enum GoogleOAuth {
         return TokenSet(
             accessToken: response.access_token,
             refreshToken: response.refresh_token ?? tokens.refreshToken,
-            expiry: Date().addingTimeInterval(response.expires_in ?? 3600)
+            expiry: Date().addingTimeInterval(response.expires_in ?? 3600),
+            scopes: response.grantedScopes ?? tokens.scopes
         )
     }
 
@@ -164,6 +172,10 @@ public enum GoogleOAuth {
         var access_token: String
         var refresh_token: String?
         var expires_in: Double?
+        /// The permissions this sign-in has, space-separated. Google sends it with new and refreshed tokens.
+        var scope: String?
+
+        var grantedScopes: [String]? { scope.map { $0.split(separator: " ").map(String.init) } }
     }
 
     static func tokenRequest(_ form: [String: String], transport: HTTPTransport) async throws -> TokenResponse {

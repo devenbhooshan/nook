@@ -20,6 +20,10 @@ public final class MCPServer {
     private let attachmentCache: () throws -> AttachmentCache
     let createdDrafts: CreatedDrafts
     private let version: String
+    /// What an account's sign-in allows, when known, so a tool can say a permission is missing instead of failing later.
+    public var grantedScopes: (String) -> [String]? = { _ in nil }
+    /// Reads an account's calendar, for list_events.
+    public var makeCalendar: (String) throws -> CalendarSource = { throw GmailError.notSignedIn($0) }
 
     /// - Parameters:
     ///   - isEnabled: Checked on every tool call, so turning access off in Nook takes effect right away.
@@ -136,6 +140,8 @@ public final class MCPServer {
             case "get_draft": return toolResult(try getDraft(arguments))
             case "update_draft": return toolResult(try updateDraft(arguments))
             case "delete_draft": return toolResult(try deleteDraft(arguments))
+            case "create_event": return toolResult(try createEvent(arguments))
+            case "list_events": return toolResult(try listEvents(arguments))
             default: return toolError("Unknown tool: \(name)")
             }
         } catch let error as RPCError {
@@ -153,6 +159,8 @@ public final class MCPServer {
                 "name": account.name,
                 "unread_inbox_threads": unread[account.email] ?? 0,
                 "last_synced": account.lastSync.map(Self.iso8601) ?? NSNull(),
+                // Whether create_event invites can be sent from it; null until Nook has seen what the sign-in allows.
+                "can_send_invites": grantedScopes(account.email).map { $0.contains(GoogleOAuth.calendarEventsScope) } ?? NSNull(),
             ]
         }]
     }
@@ -401,7 +409,7 @@ public final class MCPServer {
             ],
             "annotations": ["readOnlyHint": true, "openWorldHint": true],
         ],
-    ] + draftTools
+    ] + draftTools + [eventTool, listEventsTool]
 }
 
 /// Where Nook keeps the MCP switch. The app writes it; `nook-mcp` reads it.

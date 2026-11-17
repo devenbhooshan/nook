@@ -81,6 +81,12 @@ struct RootView: View {
         .sheet(item: $store.draft) { draft in
             ComposeView(draft: draft)
         }
+        .background {
+            // Its own view: two sheets on one view can't both present.
+            Color.clear.sheet(item: $store.eventInvite) { invite in
+                EventInviteView(invite: invite)
+            }
+        }
         .background(WindowReader { store.attach(to: $0) })
         .tint(Theme.accent)
         .onAppear {

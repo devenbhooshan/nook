@@ -6,11 +6,19 @@ public struct TokenSet: Codable, Sendable, Equatable {
     public var accessToken: String
     public var refreshToken: String
     public var expiry: Date
+    /// What Google says this sign-in allows. Nil for tokens saved before Nook kept it; the next refresh fills it in.
+    public var scopes: [String]?
 
-    public init(accessToken: String, refreshToken: String, expiry: Date) {
+    public init(accessToken: String, refreshToken: String, expiry: Date, scopes: [String]? = nil) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiry = expiry
+        self.scopes = scopes
+    }
+
+    /// Whether this sign-in includes `scope`, or nil when that isn't known yet.
+    public func allows(_ scope: String) -> Bool? {
+        scopes.map { $0.contains(scope) }
     }
 }
 

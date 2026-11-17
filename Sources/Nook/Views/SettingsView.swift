@@ -223,6 +223,7 @@ private struct AccountRow: View {
         var missing: [String] = []
         if calendar.access[account.email] == .needsPermission { missing.append("Calendar") }
         if store.photoAccess[account.email] == .needsPermission { missing.append("Profile photos") }
+        if store.canAddEvents(account.email) == false { missing.append("Calendar events (for invites)") }
         return missing
     }
 
