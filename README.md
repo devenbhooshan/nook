@@ -212,7 +212,7 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 
 | Tool | What it does |
 | --- | --- |
-| `list_accounts` | Connected accounts and unread counts |
+| `list_accounts` | Connected accounts, unread counts, and whether each can send calendar invites |
 | `list_tags` | Tags, their descriptions, and inbox counts |
 | `search_threads` | Search with Nook's syntax (`from:`, `tag:`, `is:unread`, …), by mailbox, tag or account |
 | `get_thread` | Every message in a conversation, as plain text, with each message's id and attached files |
@@ -223,8 +223,12 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 | `get_draft` | One draft's full text and files, including your own edits once you've saved them |
 | `update_draft` | Changes a draft in place (text, recipients, subject, files added or removed), so edits never pile up duplicate drafts |
 | `delete_draft` | Deletes a draft the assistant made. Any other draft needs your yes in the conversation first |
+| `create_event` | Prepares a Google Calendar invite (title, time in any time zone, guests, a Meet link) and opens it in Nook. Nothing is on the calendar and no one is emailed until you click **Send Invite**. Needs calendar access: an account signed in before 0.5.0 must sign in again (**Settings → Accounts**) |
+| `list_events` | Reads an account's calendar between two times: titles, times, Meet links, organizer and each guest's answer. Read-only |
 
-**What it can't do:** send mail, or delete anything except drafts. The server talks only to the client that launched it, over stdio, and reaches the network for two things: `get_attachment` downloads a file from Gmail when Nook hasn't stored it yet, and the draft tools read and write your Gmail drafts. Files they attach come from paths the assistant gives, so it can attach any file you can read; you see every file in Nook before anything is sent. Files it can't return as text are copied, unencrypted, to `~/Library/Caches/Nook/mcp-attachments` for a day, readable only by you. Drafts open in Nook (through `nook://` links), and nothing goes out until you press Send. If you're already writing a message, Nook leaves it alone and the draft waits in Drafts. Turning the setting off takes effect on the next tool call. Keep in mind that whatever your assistant reads, it sends to its own model provider, so connect only assistants you trust with your mail.
+`draft_reply`, `compose_draft` and `update_draft` also take an `html` body for links, bold, italics and lists. The email goes out as HTML with a plain-text version, and Nook's compose window shows the formatting.
+
+**What it can't do:** send mail, or delete anything except drafts. The server talks only to the client that launched it, over stdio, and reaches the network for three things: `get_attachment` downloads a file from Gmail when Nook hasn't stored it yet, the draft tools read and write your Gmail drafts, and `list_events` reads your Google Calendar. Files they attach come from paths the assistant gives, so it can attach any file you can read; you see every file in Nook before anything is sent. Files it can't return as text are copied, unencrypted, to `~/Library/Caches/Nook/mcp-attachments` for a day, readable only by you. Drafts open in Nook (through `nook://` links), and nothing goes out until you press Send. If you're already writing a message, Nook leaves it alone and the draft waits in Drafts. Turning the setting off takes effect on the next tool call. Keep in mind that whatever your assistant reads, it sends to its own model provider, so connect only assistants you trust with your mail.
 
 ## Troubleshooting
 
@@ -286,7 +290,7 @@ The MCP on/off switch in Settings is a consent setting, not a security boundary:
 | Attachments you open, preview or drag | A temporary folder (`$TMPDIR/Nook Attachments`) only you can read, emptied when Nook starts and quits. Files you save go where you save them |
 | Preferences | `com.devenbhooshan.nook` defaults domain |
 | Network traffic | `gmail.googleapis.com`, `oauth2.googleapis.com`, `openidconnect.googleapis.com`, `people.googleapis.com` and Google's photo server (`googleusercontent.com`), and your Ollama server if you use one |
-| MCP | Stdio to the client that launches `nook-mcp`. It reaches Gmail only for `get_attachment` (a file Nook hasn't stored yet) and the draft tools |
+| MCP | Stdio to the client that launches `nook-mcp`. It reaches Gmail only for `get_attachment` (a file Nook hasn't stored yet) and the draft tools, and Google Calendar only for `list_events`. Invites from `create_event` are sent by the app, when you click Send Invite |
 
 ## Development
 
