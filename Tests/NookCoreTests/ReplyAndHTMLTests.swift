@@ -66,7 +66,7 @@ struct EmailHTMLTests {
         html.bodyHTML = "<img src=\"https://tracker.example/p.gif\">"
 
         let blocked = EmailHTML.document(for: html, allowRemoteContent: false)
-        #expect(blocked.contains("img-src data: cid:;"))
+        #expect(blocked.contains("img-src data: cid: https://*.cdn.office.net/assets/reaction/;"))
         #expect(!blocked.contains("img-src *"))
         #expect(blocked.hasPrefix("<meta charset"))
 
@@ -89,9 +89,27 @@ struct EmailHTMLTests {
         ("<link rel=stylesheet href=\"https://fonts.example/x.css\">", true),
         ("<img src=\"cid:logo\"><a href=\"https://example.com\">link</a>", false),
         ("<img src=\"data:image/png;base64,AAAA\">", false),
+        // Outlook reaction icons load even when remote content is blocked; anything else on that CDN doesn't.
+        ("<img alt=\"heart\" src=\"https://outlook-1.cdn.office.net/assets/reaction/heart.png\">", false),
+        ("<img src=\"https://outlook-1.cdn.office.net/assets/other.png\">", true),
+        ("<img src=\"https://outlook-1.cdn.office.net/assets/reaction/../x.png\">", true),
+        ("<img src=\"https://outlook-1.cdn.office.net/assets/reaction/like.png\"><img src=\"https://t.co/x.gif\">", true),
     ])
     func detectsRemoteContent(html: String, expected: Bool) {
         #expect(EmailHTML.containsRemoteContent(html) == expected)
+    }
+
+    /// Greg Dermond's 👍 on "Re: Were these the right people?" (19 Nov 2026), as Outlook sent it: the icon is a remote
+    /// image, which showed as an empty box while remote content was blocked.
+    @Test func outlookReactionIconIsNotHeldBack() {
+        let html = """
+        <table style="border-spacing:0"><tbody><tr>
+        <td><img alt="like" src="https://outlook-1.cdn.office.net/assets/reaction/like.png" style="height:25px; width:25px">
+        </td>
+        <td><span style="font-weight:bold; padding-left:3px">Greg Dermond</span> <span>reacted to your message:</span>
+        </td></tr></tbody></table>
+        """
+        #expect(!EmailHTML.containsRemoteContent(html))
     }
 }
 

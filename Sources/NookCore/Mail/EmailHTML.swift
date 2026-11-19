@@ -7,10 +7,15 @@ import Foundation
 ///   so tracking pixels and remote fonts can't report that a message was opened.
 /// - The web view runs with JavaScript disabled. See `EmailWebView` in the app.
 public enum EmailHTML {
+    /// Outlook draws a reaction ("Greg reacted to your message") with an icon from Microsoft's CDN instead of
+    /// attaching it, so blocking remote content left an empty box. These icons load even then: they're the same
+    /// static files for everyone, with nothing in the URL about the reader or the message, so they can't track.
+    static let outlookReactionIcons = "https://*.cdn.office.net/assets/reaction/"
+
     public static func document(for message: MailMessage, allowRemoteContent: Bool) -> String {
         let csp = allowRemoteContent
             ? "default-src 'none'; img-src * data: cid:; style-src 'unsafe-inline' *; font-src * data:; media-src *"
-            : "default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:"
+            : "default-src 'none'; img-src data: cid: \(outlookReactionIcons); style-src 'unsafe-inline'; font-src data:"
         let head = """
         <meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="\(csp)">
@@ -51,9 +56,18 @@ public enum EmailHTML {
         return linkify(escape(own)) + "<div class=\"nook-quote\">" + linkify(escape(quote)) + "</div>"
     }
 
-    /// Whether the HTML would load anything from the network.
+    /// Whether the HTML would load anything from the network that blocking remote content holds back.
+    /// Outlook's reaction icons don't count: they load either way (see `outlookReactionIcons`).
     public static func containsRemoteContent(_ html: String) -> Bool {
-        html.range(of: #"(?i)(src|background)\s*=\s*["']?\s*(https?:)?//"#, options: .regularExpression) != nil
+        var html = html
+        if html.contains("cdn.office.net/assets/reaction/") {
+            html = html.replacingOccurrences(
+                of: #"(?i)https://[a-z0-9-]+\.cdn\.office\.net/assets/reaction/[a-z0-9_-]+\.png"#,
+                with: "",
+                options: .regularExpression
+            )
+        }
+        return html.range(of: #"(?i)(src|background)\s*=\s*["']?\s*(https?:)?//"#, options: .regularExpression) != nil
             || html.range(of: #"(?i)url\(\s*["']?\s*(https?:)?//"#, options: .regularExpression) != nil
             || html.range(of: #"(?i)<link[^>]+href\s*=\s*["']?\s*(https?:)?//"#, options: .regularExpression) != nil
     }
