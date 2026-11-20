@@ -871,13 +871,15 @@ final class AppStore: ObservableObject {
             directories[email] = GooglePeople(tokens: OAuthTokenProvider(email: email, tokens: tokens, config: config, store: secrets))
         }
         let brandLogos = defaults.bool(forKey: BrandLogos.enabledKey)
-        let domains = brandLogos ? repo.senderDomains() : []
+        let repo = repo
         Task {
             let result = await PhotoSync.run(directories: directories)
             photoAccess = result.access
             let updated = await avatars.download(result.photos)
             AvatarImages.shared.loaded(avatars, updated: updated)
             if brandLogos {
+                // Two scans of the store: off the main thread.
+                let domains = await Task.detached(priority: .utility) { repo.senderDomains() }.value
                 // Logos show batch by batch: a full pass over a few hundred domains takes a while.
                 await BrandLogos.refresh(domains: domains, store: avatars) { saved in
                     await MainActor.run { AvatarImages.shared.loaded(avatars, updated: Set(saved.map(BrandLogos.key(for:)))) }

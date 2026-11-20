@@ -12,6 +12,22 @@ struct MailRepositoryTests {
         try repo.addAccount(email: "work@example.com", name: "Work")
     }
 
+    /// Greg Dermond at esri.com wrote a handful of times, so esri.com never made the top domains and never got its
+    /// logo. Domains that wrote recently are looked up too.
+    @Test func senderDomainsIncludeRecentLowVolumeSenders() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var messages = (0..<5).map { MailMessage.fixture(id: "big\($0)", from: "news@big.com", minutesAgo: 60 * 24 * 90) }
+        messages += (0..<3).map { MailMessage.fixture(id: "mid\($0)", from: "a@mid.com", minutesAgo: 60 * 24 * 90) }
+        messages.append(.fixture(id: "new", from: "gdermond@esri.com", minutesAgo: 60 * 24 * 3))
+        messages.append(.fixture(id: "old", from: "x@stale.com", minutesAgo: 60 * 24 * 60))
+        messages.append(.fixture(id: "mine", from: "me@sent.com", labels: [SystemLabel.sent], minutesAgo: 60))
+        try repo.upsert(messages)
+
+        let domains = repo.senderDomains(limit: 1, now: now)
+        #expect(domains == ["big.com", "esri.com"])
+        #expect(repo.senderDomains(limit: 2, recentDays: 0, now: now) == ["big.com", "mid.com"])
+    }
+
     @Test func seedsDefaultTags() {
         #expect(repo.tags() == Tag.defaults)
         #expect(repo.tags().filter(\.isSplit).map(\.name) == ["Needs Reply", "Newsletter", "Receipt", "Notification"])

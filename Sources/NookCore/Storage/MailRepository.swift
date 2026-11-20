@@ -178,16 +178,22 @@ public final class MailRepository: @unchecked Sendable {
         ((try? reader.query("SELECT 1 AS x FROM threads LIMIT 1")) ?? []).isEmpty == false
     }
 
-    /// The domains that send you the most mail, for brand logos.
-    public func senderDomains(limit: Int = 400) -> [String] {
-        let rows = (try? reader.query(
-            """
-            SELECT lower(substr(from_email, instr(from_email, '@') + 1)) AS domain, COUNT(*) AS n FROM messages
-            WHERE instr(from_email, '@') > 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,DRAFT,%'
-            GROUP BY domain ORDER BY n DESC LIMIT ?
-            """, [limit]
+    /// The domains to look brand logos up for: the ones that write most, then any that wrote recently. Without the
+    /// recent ones, someone new (a handful of emails, so never in the top few hundred) never got their logo.
+    public func senderDomains(limit: Int = 400, recentDays: Int = 30, now: Date = Date()) -> [String] {
+        let received = "instr(from_email, '@') > 0 AND labels NOT LIKE '%,SENT,%' AND labels NOT LIKE '%,SPAM,%' AND labels NOT LIKE '%,DRAFT,%'"
+        let domain = "lower(substr(from_email, instr(from_email, '@') + 1))"
+        let top = (try? reader.query(
+            "SELECT \(domain) AS domain, COUNT(*) AS n FROM messages WHERE \(received) GROUP BY domain ORDER BY n DESC LIMIT ?",
+            [limit]
         )) ?? []
-        return rows.map { $0.string("domain") }.filter { $0.contains(".") }
+        let since = now.addingTimeInterval(-Double(recentDays) * 86_400)
+        let recent = (try? reader.query(
+            "SELECT DISTINCT \(domain) AS domain FROM messages WHERE \(received) AND date >= ?",
+            [since]
+        )) ?? []
+        var seen: Set<String> = []
+        return (top + recent).map { $0.string("domain") }.filter { $0.contains(".") && seen.insert($0).inserted }
     }
 
     /// Who has written to you and whom you've written to, for recipient suggestions.
