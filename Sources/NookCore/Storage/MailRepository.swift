@@ -245,8 +245,8 @@ public final class MailRepository: @unchecked Sendable {
                 )
                 // Bodies live apart so the hot table stays small.
                 try db.execute(
-                    "INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text, attachments) VALUES (?, ?, ?, ?, ?)",
-                    [m.account, m.id, Self.packBody(m.bodyHTML), Self.packBody(m.bodyText), Self.encode(m.attachments)]
+                    "INSERT OR REPLACE INTO message_bodies(account, id, body_html, body_text, attachments, dmarc) VALUES (?, ?, ?, ?, ?, ?)",
+                    [m.account, m.id, Self.packBody(m.bodyHTML), Self.packBody(m.bodyText), Self.encode(m.attachments), m.passedDMARC]
                 )
                 try deleteFromSearch(account: m.account, id: m.id)
                 // File names are searchable, so "invoice" finds the email with invoice.pdf.
@@ -333,6 +333,18 @@ public final class MailRepository: @unchecked Sendable {
             [account, threadId]
         )) ?? []
         return rows.map { $0.string("id") }
+    }
+
+    /// Senders of messages in a conversation stored before Nook kept their DMARC result, by message id.
+    public func messagesMissingDMARC(account: String, threadId: String) -> [(id: String, fromEmail: String)] {
+        let rows = (try? reader.query(
+            """
+            SELECT m.id, m.from_email FROM messages m JOIN message_bodies b ON b.account = m.account AND b.id = m.id
+            WHERE m.account = ? AND m.thread_id = ? AND b.dmarc IS NULL AND m.labels NOT LIKE '%,SENT,%'
+            """,
+            [account, threadId]
+        )) ?? []
+        return rows.map { ($0.string("id"), $0.string("from_email")) }
     }
 
     /// The newest messages stored before Nook kept attachments, for filling them in a few at a time.
@@ -1225,7 +1237,7 @@ public final class MailRepository: @unchecked Sendable {
     /// Full messages, bodies included. Only for reading a thread or tagging, never for lists.
     static let selectWithBodies = """
     SELECT m.*, COALESCE(b.body_html, '') AS body_html, COALESCE(b.body_text, '') AS body_text,
-           b.attachments AS attachments
+           b.attachments AS attachments, b.dmarc AS dmarc
     FROM messages m LEFT JOIN message_bodies b ON b.account = m.account AND b.id = m.id
     """
 
@@ -1266,7 +1278,8 @@ public final class MailRepository: @unchecked Sendable {
             labels: decode(row.string("labels")),
             messageIdHeader: row.string("message_id"),
             references: row.string("refs"),
-            attachments: decodeAttachments(row.string("attachments"))
+            attachments: decodeAttachments(row.string("attachments")),
+            passedDMARC: row.isNull("dmarc") ? nil : row.int("dmarc") != 0
         )
     }
 }

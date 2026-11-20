@@ -46,6 +46,25 @@ struct Avatar: View {
     }
 }
 
+/// Gmail's blue check: the sender's company proved it owns its logo (a Verified Mark Certificate), and this email
+/// passed DMARC, so it really came from that company.
+struct VerifiedSenderBadge: View {
+    let message: MailMessage
+
+    @ObservedObject private var photos = AvatarImages.shared
+
+    var body: some View {
+        if message.passedDMARC == true, photos.hasVerifiedMark(message.fromEmail),
+           let domain = BrandLogos.domain(of: message.fromEmail) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 12.5))
+                .foregroundStyle(.white, Color(red: 0.10, green: 0.45, blue: 0.91))
+                .help("Verified sender: \(domain) has proven it owns this logo, and this email passed its checks.")
+                .accessibilityLabel("Verified sender")
+        }
+    }
+}
+
 /// A keyboard key, for hints.
 struct KeyCap: View {
     let label: String

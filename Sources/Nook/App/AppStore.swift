@@ -648,9 +648,13 @@ final class AppStore: ObservableObject {
         fillInAttachments(thread)
     }
 
-    /// Mail stored before Nook kept attachments is fetched again when it's opened, so its files show up.
+    /// Mail stored before Nook kept attachments is fetched again when it's opened, so its files show up. So is mail
+    /// from a verified company stored before Nook kept DMARC results, so its verified check can show.
     private func fillInAttachments(_ thread: ThreadSummary) {
-        let missing = repo.messagesMissingAttachments(account: thread.account, threadId: thread.threadId)
+        let avatars = AvatarImages.shared
+        let unchecked = repo.messagesMissingDMARC(account: thread.account, threadId: thread.threadId)
+            .filter { avatars.hasVerifiedMark($0.fromEmail) }.map(\.id)
+        let missing = Array(Set(repo.messagesMissingAttachments(account: thread.account, threadId: thread.threadId) + unchecked))
         guard !missing.isEmpty, !isDemo else { return }
         let sync = sync
         Task {

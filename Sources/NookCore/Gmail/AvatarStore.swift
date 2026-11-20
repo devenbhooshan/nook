@@ -87,4 +87,58 @@ public final class AvatarStore: @unchecked Sendable {
 
     /// Downloads skip the HTTP cache: the files above are the only copy kept.
     public static let session: URLSession = URLSession(configuration: .ephemeral)
+
+    // MARK: Verified marks
+
+    /// The last check of a domain's Verified Mark Certificate: which certificate, when it was checked, and when it
+    /// expires if it passed (nil if it didn't).
+    public struct VerifiedMark: Codable, Equatable, Sendable {
+        public var certificate: String
+        public var expires: Date?
+        public var checked: Date
+
+        public init(certificate: String, expires: Date?, checked: Date = Date()) {
+            self.certificate = certificate
+            self.expires = expires
+            self.checked = checked
+        }
+
+        /// Whether to check `certificate` (the one the domain lists now) again: it's a different certificate, or this
+        /// one failed or has expired and wasn't checked in the last week (it may have been renewed in place).
+        public func needsCheck(of certificate: String, at date: Date = Date()) -> Bool {
+            if certificate != self.certificate { return true }
+            if let expires, expires > date { return false }
+            return date.timeIntervalSince(checked) > 7 * 86_400
+        }
+    }
+
+    private var verifiedURL: URL { directory.appendingPathComponent("verified.json") }
+    private lazy var verified: [String: VerifiedMark] = {
+        (try? JSONDecoder().decode([String: VerifiedMark].self, from: Data(contentsOf: verifiedURL))) ?? [:]
+    }()
+
+    /// Whether the domain has a mark that passed its check and is still valid.
+    public func isVerified(_ domain: String, at date: Date = Date()) -> Bool {
+        guard let expires = lock.withLock({ verified[domain.lowercased()] })?.expires else { return false }
+        return expires > date
+    }
+
+    /// The last check of the domain's mark, passed or not.
+    public func verifiedMark(for domain: String) -> VerifiedMark? {
+        lock.withLock { verified[domain.lowercased()] }
+    }
+
+    /// Records a check of a domain's mark, or forgets it with nil. Returns whether the domain's verified state changed.
+    @discardableResult
+    public func setVerifiedMark(_ mark: VerifiedMark?, for domain: String, at date: Date = Date()) -> Bool {
+        let before = isVerified(domain, at: date)
+        let snapshot = lock.withLock { () -> [String: VerifiedMark]? in
+            guard verified[domain.lowercased()] != mark else { return nil }
+            verified[domain.lowercased()] = mark
+            return verified
+        }
+        guard let snapshot else { return false }
+        try? JSONEncoder().encode(snapshot).write(to: verifiedURL, options: .atomic)
+        return isVerified(domain, at: date) != before
+    }
 }

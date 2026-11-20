@@ -300,6 +300,7 @@ struct MessageCard: View {
                     Text(Addresses.displayName(name: message.fromName, email: message.fromEmail))
                         .font(.system(size: 13.5, weight: .semibold))
                         .contextMenu { copyMenu(name: message.fromName, email: message.fromEmail) }
+                    VerifiedSenderBadge(message: message)
                     if message.fromName != message.fromEmail {
                         CopyableAddress(email: message.fromEmail)
                             .contextMenu { copyMenu(name: message.fromName, email: message.fromEmail) }

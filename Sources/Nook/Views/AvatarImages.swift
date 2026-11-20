@@ -31,6 +31,14 @@ final class AvatarImages: ObservableObject {
         return cached(BrandLogos.key(for: domain))
     }
 
+    /// Whether the sender's company has a checked Verified Mark Certificate. Only with brand logos on, which is what
+    /// looks marks up. A message also has to pass DMARC before it shows as verified (`MailMessage.passedDMARC`).
+    func hasVerifiedMark(_ email: String) -> Bool {
+        guard UserDefaults.standard.bool(forKey: BrandLogos.enabledKey), let store,
+              let domain = BrandLogos.domain(of: email) else { return false }
+        return store.isVerified(domain)
+    }
+
     /// Brand logos were turned on or off: redraw avatars.
     func brandLogosChanged() {
         version += 1

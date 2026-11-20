@@ -94,6 +94,9 @@ public struct MailMessage: Identifiable, Hashable, Sendable {
     public var references: String
     /// Files sent with the message, including images shown inside an HTML body.
     public var attachments: [Attachment]
+    /// Whether Gmail found that the message passed DMARC under an enforced policy (`VerifiedMarks.passedDMARC`).
+    /// Nil for mail stored before Nook kept this.
+    public var passedDMARC: Bool?
 
     /// The attachments to list under the message. Images the body already shows aren't listed again.
     public var listedAttachments: [Attachment] { attachments.filter { !$0.isInline } }
@@ -107,9 +110,10 @@ public struct MailMessage: Identifiable, Hashable, Sendable {
         to: String = "", cc: String = "", subject: String = "", snippet: String = "",
         bodyHTML: String = "", bodyText: String = "", date: Date = Date(),
         labels: Set<String> = [], messageIdHeader: String = "", references: String = "",
-        attachments: [Attachment] = []
+        attachments: [Attachment] = [], passedDMARC: Bool? = nil
     ) {
         self.attachments = attachments
+        self.passedDMARC = passedDMARC
         self.id = id
         self.account = account
         self.threadId = threadId

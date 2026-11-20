@@ -248,7 +248,7 @@ public final class Database: @unchecked Sendable {
 }
 
 enum Schema {
-    static let version = 15
+    static let version = 16
 
     static func migrate(_ db: Database) throws {
         let current = try db.query("PRAGMA user_version").first?.int("user_version") ?? 0
@@ -340,6 +340,13 @@ enum Schema {
                 if try db.query("SELECT 1 AS x FROM messages_fts LIMIT 1").isEmpty {
                     try SearchIndex.switchToLean(db)
                     try db.run("DROP TABLE IF EXISTS \(SearchIndex.retiredName)")
+                }
+            }),
+            (16, {
+                // Whether Gmail found each message passed DMARC, for the verified sender check. NULL for mail stored
+                // before: a conversation from a verified sender fetches its messages again when it's opened.
+                if try !hasColumn(db, table: "message_bodies", column: "dmarc") {
+                    try db.run("ALTER TABLE message_bodies ADD COLUMN dmarc INTEGER")
                 }
             }),
         ]

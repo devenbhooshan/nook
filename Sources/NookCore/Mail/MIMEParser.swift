@@ -46,7 +46,8 @@ public enum MIMEParser {
             labels: Set(gmail.labelIds ?? []),
             messageIdHeader: header("Message-ID"),
             references: header("References"),
-            attachments: attachments
+            attachments: attachments,
+            passedDMARC: VerifiedMarks.passedDMARC(headers: headers.map { ($0.name, $0.value) }, fromEmail: from.email)
         )
     }
 

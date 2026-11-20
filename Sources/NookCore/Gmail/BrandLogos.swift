@@ -34,36 +34,78 @@ public enum BrandLogos {
     }
 
     /// Finds each domain's logo and downloads the ones that are new or changed, a batch at a time, so logos appear as
-    /// they arrive. `onBatch` gets each batch's domains with a new logo. Returns all of them.
+    /// they arrive. Then checks the Verified Mark Certificate of any domain whose certificate is new or changed
+    /// (`VerifiedMarks`). `onBatch` gets each batch's domains with a new logo or a changed mark. Returns all of them.
     public static func refresh(
         domains: [String], store: AvatarStore, dns: TXTResolver = SystemDNS(timeout: 2),
-        transport: HTTPTransport = AvatarStore.session, batchSize: Int = 16,
+        transport: HTTPTransport = AvatarStore.session, batchSize: Int = 16, now: Date = Date(),
         onBatch: @Sendable (Set<String>) async -> Void = { _ in }
     ) async -> Set<String> {
         var updated: Set<String> = []
         for start in stride(from: 0, to: domains.count, by: max(1, batchSize)) {
             let batch = Array(domains[start..<min(start + max(1, batchSize), domains.count)])
-            let found = await withTaskGroup(of: (String, URL?).self, returning: [String: URL].self) { group in
+            let found = await withTaskGroup(of: (String, Record?).self, returning: [String: Record].self) { group in
                 for domain in batch {
-                    group.addTask { (domain, await logoURL(for: domain, dns: dns)) }
+                    group.addTask { (domain, await record(for: domain, dns: dns)) }
                 }
-                var found: [String: URL] = [:]
-                for await (domain, url) in group { if let url { found[key(for: domain)] = url } }
+                var found: [String: Record] = [:]
+                for await (domain, record) in group { if let record { found[domain] = record } }
                 return found
             }
-            let saved = Set(await store.download(found, transport: transport).map { String($0.dropFirst()) })
-            updated.formUnion(saved)
-            if !saved.isEmpty { await onBatch(saved) }
+            let logos = Dictionary(uniqueKeysWithValues: found.map { (key(for: $0.key), $0.value.logo) })
+            var changed = Set(await store.download(logos, transport: transport).map { String($0.dropFirst()) })
+            changed.formUnion(await checkMarks(batch: batch, found: found, store: store, transport: transport, now: now))
+            updated.formUnion(changed)
+            if !changed.isEmpty { await onBatch(changed) }
         }
         return updated
     }
 
-    /// The first BIMI logo found for the domain or one of its parents.
-    static func logoURL(for domain: String, dns: TXTResolver) async -> URL? {
+    /// A domain's BIMI record: its logo, its Verified Mark Certificate if it has one, and the domain it was found on
+    /// (the sender's own domain or a parent), which is the name the certificate has to carry.
+    struct Record: Sendable {
+        var logo: URL
+        var certificate: URL?
+        var domain: String
+    }
+
+    /// The first BIMI record with a logo, for the domain or one of its parents.
+    static func record(for domain: String, dns: TXTResolver) async -> Record? {
         for candidate in candidates(for: domain) {
-            if let url = logoURL(fromRecords: await dns.txt("default._bimi.\(candidate)")) { return url }
+            let records = await dns.txt("default._bimi.\(candidate)")
+            if let logo = logoURL(fromRecords: records) {
+                return Record(logo: logo, certificate: VerifiedMarks.certificateURL(fromRecords: records), domain: candidate)
+            }
         }
         return nil
+    }
+
+    /// Updates the batch's verified marks, checking a certificate only when `VerifiedMark.needsCheck` says so; an
+    /// expired one stops counting on its own (`AvatarStore.isVerified`). Returns the domains whose verified state changed.
+    static func checkMarks(
+        batch: [String], found: [String: Record], store: AvatarStore, transport: HTTPTransport, now: Date = Date()
+    ) async -> Set<String> {
+        await withTaskGroup(of: String?.self, returning: Set<String>.self) { group in
+            for domain in batch {
+                group.addTask {
+                    guard let record = found[domain], let certificate = record.certificate,
+                          let logo = store.image(for: key(for: domain)) else {
+                        return store.setVerifiedMark(nil, for: domain, at: now) ? domain : nil
+                    }
+                    if let last = store.verifiedMark(for: domain), !last.needsCheck(of: certificate.absoluteString, at: now) { return nil }
+                    var expires: Date?
+                    if let (pem, response) = try? await transport.send(URLRequest(url: certificate)),
+                       response.statusCode == 200, pem.count < 200_000 {
+                        expires = VerifiedMarks.verify(pem: pem, domain: record.domain, logo: logo, at: now)
+                    }
+                    let mark = AvatarStore.VerifiedMark(certificate: certificate.absoluteString, expires: expires, checked: now)
+                    return store.setVerifiedMark(mark, for: domain, at: now) ? domain : nil
+                }
+            }
+            var changed: Set<String> = []
+            for await domain in group { if let domain { changed.insert(domain) } }
+            return changed
+        }
     }
 
     /// Where a domain's logo is kept in the photo store, beside people's photos.
