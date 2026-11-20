@@ -128,7 +128,11 @@ struct ThreadListView: View {
         Button(thread.isUnread ? "Mark as Read" : "Mark as Unread") { store.selectedID = thread.id; store.toggleRead() }
         Divider()
         Button("Reply") { store.selectedID = thread.id; store.reply(.reply) }
-        Button("Move to Trash", role: .destructive) { store.selectedID = thread.id; store.trash() }
+        if store.effectiveMailbox == .drafts {
+            Button("Delete Draft", role: .destructive) { store.selectedID = thread.id; store.deleteDraft() }
+        } else {
+            Button("Move to Trash", role: .destructive) { store.selectedID = thread.id; store.trash() }
+        }
     }
 }
 

@@ -1146,6 +1146,7 @@ final class AppStore: ObservableObject {
     }
 
     func trash() {
+        if effectiveMailbox == .drafts { return deleteDraft() }
         guard let thread = currentThread else { return }
         let snapshots = (try? repo.modifyThread(account: thread.account, threadId: thread.threadId, add: [SystemLabel.trash], remove: [SystemLabel.inbox])) ?? []
         advance(after: thread)
@@ -1153,6 +1154,32 @@ final class AppStore: ObservableObject {
         showToast("Moved to Trash", undo: { [weak self] in
             try? self?.repo.restore(snapshots)
             self?.remote(thread, rollback: []) { try await $0.untrashThread(id: thread.threadId) }
+        })
+    }
+
+    /// ⌫ in Drafts: deletes the selected draft, never the conversation a reply draft belongs to. Gmail keeps no
+    /// copy of a deleted draft, so it's deleted there only once the Undo toast has gone.
+    func deleteDraft() {
+        guard let row = selectedThread, let message = repo.message(account: row.account, id: row.latestMessageId) else { return }
+        let account = row.account, messageId = message.id
+        try? repo.deleteMessages(account: account, ids: [messageId])
+        advance(after: row)
+        let sync = sync
+        let removal = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard !Task.isCancelled else { return }
+            do {
+                let service = try await sync.service(for: account)
+                if let id = try await service.draftID(messageId: messageId) { try await service.deleteDraft(id: id) }
+            } catch {
+                try? self?.repo.upsert([message])
+                self?.reload(inBackground: true)
+                self?.showToast("Couldn't delete the draft in Gmail, so it's back. \(error.localizedDescription)", isError: true)
+            }
+        }
+        showToast("Draft deleted", undo: { [weak self] in
+            removal.cancel()
+            try? self?.repo.upsert([message])
         })
     }
 
