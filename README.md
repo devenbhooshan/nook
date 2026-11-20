@@ -19,17 +19,15 @@ https://github.com/user-attachments/assets/5bf6c17f-e201-4cdd-ba61-ff62ef6b7c4e
 - **Built for the keyboard.** Single-key shortcuts in the style of Superhuman, a ⌘K command palette that learns which command you mean by the letters you type, and automatic advance to the next conversation after you finish one. The sidebar stays out of the way until you want it (`⌘\`).
 - **Reminders.** Press `h` to be reminded about a conversation at a time you pick or type ("fri 2pm", "3d"): a pop-up that stays until you deal with it, and the conversation at the top of your inbox. When you send, ask to be reminded if nobody replies.
 - **Your calendar, a key away.** Press `t` for today and tomorrow at a glance, with a Join button for the next call, or `g c` for your Google Calendar by day, week or month, across all your accounts. Click an event for its details, guests and notes, right in Nook.
-- **Attachments, done properly.** Images and PDFs show a preview under the message. Click for Quick Look, double-click to open, drag to Finder, or save everything to Downloads. Images pasted into an email show where the sender put them. Attach files with `⌘⇧A` or by dropping them on the message, and forwarding keeps the original files.
-- **Many accounts, one inbox.** See every account together, or switch to one with ⌘1–⌘9 (⌘0 for all).
 - **Local-first.** Your mail is synced into a SQLite database on your Mac. Search, filters and tags all run locally, so they're instant and work offline.
 - **Private by default.** There's no Nook server. The app talks straight to Gmail using an OAuth client you control. Tokens live in the macOS Keychain. Remote images, which often act as tracking pixels, are blocked unless you load them (once, or always for a sender or domain you trust), and JavaScript in email never runs.
 - **Encrypted at rest.** The local mail store is encrypted with SQLCipher (AES-256) using a key that never leaves your Mac's Keychain.
 
-| Split inbox | Reader with attachments | Dark mode |
+| Split inbox | Reader | Dark mode |
 | --- | --- | --- |
-| ![Split inbox](docs/screenshots/list.png) | ![Reader with attachments](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) |
-| **Calendar** | **Reply with a file** | **Command palette** |
-| ![Calendar](docs/screenshots/calendar.png) | ![Reply with a file](docs/screenshots/compose.png) | ![Command palette](docs/screenshots/palette.png) |
+| ![Split inbox](docs/screenshots/list.png) | ![Reader](docs/screenshots/reader.png) | ![Dark mode](docs/screenshots/reader-dark.png) |
+| **Calendar** | **Compose** | **Command palette** |
+| ![Calendar](docs/screenshots/calendar.png) | ![Compose](docs/screenshots/compose.png) | ![Command palette](docs/screenshots/palette.png) |
 
 ## Download
 
@@ -121,14 +119,6 @@ See [Using Nook from an AI assistant](#using-nook-from-an-ai-assistant-mcp) belo
 
 Go-to sequences: `g i` inbox, `g c` calendar, `g h` reminders, `g s` starred, `g t` sent, `g d` drafts, `g a` all mail, `g #` trash.
 
-In the ⌘K palette, the command you usually pick for the letters you type comes first: pick Move to Trash after typing `t` a couple of times, and `t` `↵` trashes. With nothing typed, the list keeps its fixed order.
-
-In an open conversation, `↑` / `↓` scroll it, `space` / `⇧space` and Page Up / Page Down move a page, and Home / End jump to the top or bottom. Swipe right with two fingers on a trackpad (or one on a Magic Mouse) to go back to the list; this follows **Swipe between pages** in System Settings.
-
-## Reading and replying
-
-Reply, Reply all and Forward stay pinned at the bottom of a conversation, so they're in reach however long it gets. The earlier messages a reply quotes are folded behind a `•••` button, the way Gmail does it; click it to read them. Replies open with an empty page: the message you're answering is folded under what you write, and goes out below it when you send.
-
 ## Reminders
 
 Press `h` on a conversation (or the bell in its toolbar) to be reminded about it. Pick later today, tomorrow morning, this weekend, next week or next month, or type a time: `2h`, `3d`, `fri`, `tomorrow 3pm`, `dec 5`. A day without a time means 8 AM. Nothing else changes: the conversation stays where it is, with a small bell beside it.
@@ -145,39 +135,20 @@ Reminders live on this Mac, because Gmail has no reminders of its own. They go o
 
 Press `t` anywhere for your agenda: today and tomorrow, with what's on now and what starts in the next few minutes picked out, and a **Join** button for Meet, Zoom, Teams and Webex calls. Any key closes it.
 
-`g c` (or **Calendar** in the sidebar) shows your calendar in place of the mail list, by **Day**, **Week** or **Month** (switch at the top right, or press `d`, `w` or `m`; Nook remembers your choice). The day view lists all-day events on top, then the hours, with overlapping meetings side by side and a line at the current time; the week shows seven days hour by hour; the month shows each day's events in its square. `←` / `→` (or `j` / `k`) move back and forward a day, week or month, `t` comes back to today, clicking a day in the week or month shows it on its own, and `esc` goes back to your mail.
+`g c` (or **Calendar** in the sidebar) shows your calendar by **Day**, **Week** or **Month** (`d`, `w`, `m`). `←` / `→` move through time, `t` comes back to today, and `esc` goes back to your mail.
 
-Click an event to see its details in Nook: when it is, which calendar and account it's on, your answer, the guests and theirs, and the description with its links. **Join** starts the call, and **Open in Google Calendar** opens it in your browser as the account it belongs to, rather than whichever Google account the browser happens to have signed in first.
+Click an event for its details, guests and notes, with **Join** for the call.
 
 It shows the calendars you have switched on in Google Calendar, for every account, and a meeting on two of your accounts shows once. Nook only reads your calendar; it never changes it. Accounts connected before the calendar arrived show **Sign in again** once, to grant it.
 
-## Attachments
-
-Files show up under the message they came with. Images and PDFs get a preview; other files show their Finder icon.
-
-- **Click** a file for Quick Look. The arrow keys page through the other files in the conversation.
-- **Double-click** to open it in its app, or **drag** it to Finder, the Desktop or another app.
-- **Right-click** for Save to Downloads, Save As… and Show in Finder. With more than one file, **Save all to Downloads** saves them together. These are also in the ⌘K palette.
-- Images placed inside an email (screenshots pasted into Gmail, logos in a signature) show where the sender put them, and aren't listed again as files.
-
-Nook downloads attachments in the background, newest mail first, and keeps them as encrypted files beside its mail store (`~/Library/Application Support/Nook/Attachments`), so they open instantly. Each file is sealed with AES-GCM under a key derived from the store's key in your Keychain, and named by a hash, so the folder reveals nothing. Keeping them out of the store keeps it small, which keeps lists, counts and search fast. Stores from before this move their files out in the background, then compact once Nook has been in the background for a minute. It keeps up to 50 GB (change this in **Settings → Privacy**), dropping the oldest mail's files past that, and leaves files over 25 MB in Gmail. Anything not stored is downloaded from Gmail when you use it. Quick Look, Open and dragging need a real file, so those copies go to a temporary folder only you can read, which Nook empties when it starts and quits. Mail synced before Nook had attachments gets its files when you open it, and a few older messages are filled in on each sync.
-
-To send files, press `⌘⇧A` or click the paperclip, drop files anywhere on the message, or paste with `⌘V`: a copied file or a screenshot is attached, and copied text stays text. Images and PDFs show a thumbnail, and clicking a file previews it in Quick Look. Gmail's limit is 25 MB per message, and Nook tells you before you press Send. Forwarding keeps the original's files, and a Gmail draft opened in Nook keeps its attachments; both are fetched from Gmail when you send. Assistants connected over MCP see file names, types and sizes, and can read a file you ask them about with `get_attachment`, which reads Nook's stored copy, or downloads that one file from Gmail if it isn't stored yet.
-
-## Drafts
-
-Drafts you start in Gmail, on any device, show up under **Drafts** (`g d`), one row per draft with who it's to. Open one to finish it in Nook. **Send** sends that Gmail draft, so it disappears from Drafts everywhere; **Close** keeps it, and asks whether to save your changes back to Gmail. To keep a message you start in Nook, press **Save Draft** (`⌘S`), or choose it when you discard: it goes to Drafts in Gmail, so you can finish it on any device. Nook doesn't save as you type, and a "remind me if no reply" choice isn't kept with the draft.
-
 ## Search
 
-Search covers every message stored locally, with full-text prefix matching from three letters (one- and two-letter words match whole words). It also understands Gmail-style operators:
+Search covers every message stored locally and understands Gmail-style operators:
 
 ```
 from:anna  to:ben  tag:receipt  is:unread  is:starred  in:sent  account:work  "exact phrase"
 has:attachment  filename:pdf
 ```
-
-File names are part of the full-text index too, so searching `invoice` finds the email with `invoice.pdf` attached.
 
 ## Tagging and the split inbox
 
@@ -187,11 +158,7 @@ Tags marked **Inbox tab** become tabs across the top of the inbox. By default th
 
 **Unread only**, in the account menu at the top left (or `⇧U`), shows only conversations with something unread, and Nook remembers it, so your inbox can open to just what's new. A conversation you read stays in the list until you switch tabs or accounts, so it doesn't vanish while you're in it.
 
-Inside the app, Nook avoids counters on purpose: a tab with unread mail just reads a little darker, and the sidebar uses a small dot. The one number is optional: the unread count on the Dock icon, which you can turn off in **Settings → General**.
-
 **Needs Reply** is kept for mail a real person is waiting on you to answer. Mail Gmail files under Promotions, Social or Forums, or that comes from a no-reply address, is never offered that tag, and a newsletter is never also tagged Needs Reply. Small models still slip now and then; a larger one, such as `qwen2.5:7b` in Ollama, tags noticeably better than `llama3.2`, at the cost of speed.
-
-Tagging starts as soon as mail arrives, newest first, alongside the sync. See [Setting up tagging](#2-setting-up-tagging) to choose the engine.
 
 ## Using Nook from an AI assistant (MCP)
 
@@ -238,7 +205,6 @@ claude mcp add nook -- /Applications/Nook.app/Contents/MacOS/nook-mcp
 | Blocked with a message about your **administrator** | Google Workspace domains can block third-party apps. In the Workspace Admin console, go to **Security → Access and data control → API controls → Manage third-party app access** and mark your OAuth client ID as trusted. |
 | **Publish app** is greyed out | Complete the **Branding** page first. |
 | **"Gmail rejected the sign-in"** after about a week | The Testing-mode 7-day expiry. Remove and re-add the account, or publish the app (see above). |
-| **"Quota exceeded for quota metric … per minute per user"** | Gmail's per-user rate limit. Nook paces itself under it and retries automatically, so this clears on its own. If you saw it in an older build, update. |
 | Tagging status says **"No on-device model available"** | Ollama isn't running or the model isn't pulled (`brew services start ollama`, `ollama pull llama3.2`), or Apple Intelligence is off. **Settings → Intelligence** shows exactly which. |
 | Apple Intelligence says **"Turn on Apple Intelligence in System Settings"** | It's switched off in **System Settings → Apple Intelligence & Siri**. Apps can't turn it on for you. |
 | The calendar says **"needs the Google Calendar API turned on"** | Click **Turn On…** (or enable **Google Calendar API** under **APIs & Services → Library** in the project behind your OAuth client), wait a minute, and open the calendar again. |
@@ -265,7 +231,7 @@ Tests/
   NookCoreTests/   Swift Testing suites, with fakes for Gmail and HTTP
 ```
 
-**Syncing in the background.** Nook syncs whenever it's running, whether or not it's in front, and keeps running when you close its window (click the Dock icon to bring it back; ⌘Q quits). It holds an activity assertion so App Nap doesn't delay the 30-second sync while it's hidden. Turn on **Settings → General → Open Nook at login** so it starts with your Mac. The Dock icon can show your unread inbox count (also in General).
+**Syncing in the background.** Nook syncs whenever it's running, whether or not it's in front, and keeps running when you close its window (click the Dock icon to bring it back; ⌘Q quits). Turn on **Settings → General → Open Nook at login** so it starts with your Mac. The Dock icon can show your unread inbox count (also in General).
 
 **How sync works.** The first sync downloads your inbox plus the last 60 days of mail and stores Gmail's `historyId`. Older mail, if Settings asks for it, is listed with a Gmail search (`newer_than:3y`, say, or everything but spam and trash), and whatever isn't stored yet downloads newest first; stopping part way loses nothing. Every 30 seconds after that, and whenever the app becomes active, Nook asks Gmail only for the history since that cursor and applies new messages, deletions and label changes. If the cursor expires, Nook falls back to a full resync that refreshes labels without downloading bodies again. Actions such as archive, star and read are applied locally first, so the UI never waits on the network, then sent to Gmail. If a Gmail call fails, Nook resyncs.
 
@@ -310,15 +276,7 @@ Every action has to feel instant with years of mail. Two tools keep it that way:
 - **`scripts/benchmark.sh`** builds a mailbox the size of a real one (120,000 messages over four years, three accounts) once, keeps it in `build/`, and fails if a search, list or count takes over 50 ms. The regular suite also has smaller per-action budgets.
 - **The dev build** (`NOOK_DEV=1 ./scripts/build-app.sh`) times every key press and click from the moment it happens until Nook is idle, notes the slow steps inside it (queries, list reloads, counts), and catches the main thread freezing. **Mail → Copy Diagnostics** (⌥⌘D) copies a plain-text report and saves it to `~/Library/Application Support/Nook/diagnostics.txt`. It names actions and steps only, never mail content. Release builds leave all of it out.
 
-Demo mode can drive the UI on its own, so changes can be checked without clicking by hand or granting Accessibility access. It posts events to its own window:
-
-```bash
-swift run Nook --demo --open 0 --compose --click 29,574 --report-windows   # click the paperclip; prints the open windows (NSOpenPanel)
-swift run Nook --demo --open 0 --compose --attach README.md --snapshot out.png   # attach a file, save a picture of the window
-open -n --stdout out.txt build/Nook.app --args --demo --open 0 --click 293,553 --report-windows   # same, against the signed app
-```
-
-`--click x,y` is in points from the top left of the window, or of the sheet when one is open; `x,y/x,y` clicks several points two seconds apart. `--keys` presses one key every quarter second, so a key that opens something (`h` for the reminder picker) lands before the next. `--wake-soon` makes the next reminder go off two seconds after launch, and `--alert-click x,y` clicks in its pop-up; `--snapshot` saves the pop-up next to the window as `<name>-alert.png`. The demo has a week of calendar events; `--calendar-signin` makes its calendar ask to sign in again instead. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID, so the two can behave differently.
+Demo mode (`--demo`) can also drive the UI by itself, clicking, pressing keys and saving snapshots of the window, so changes can be checked without Accessibility access. The flags are handled in `Sources/Nook/App/DemoData.swift`. Test the signed app as well as `swift run`: preferences and system services are tied to the bundle ID.
 
 `build-app.sh` signs with the most stable identity it finds: `$NOOK_SIGN_IDENTITY`, then a **Developer ID Application** certificate in your keychain, then the local certificate from `setup-signing.sh`, then ad hoc. Have one of the first three in place before you connect real accounts. Ad hoc builds look like a new app to macOS on every rebuild, so Keychain asks you to approve access to Nook's saved sign-ins each time.
 
@@ -333,11 +291,7 @@ No identity or credentials live in the repository. Forks sign with their own (`N
 
 `scripts/test.sh` adds the framework paths Swift Testing needs when only the Command Line Tools are installed. With Xcode, plain `swift test` works too.
 
-Demo mode accepts flags that are handy for screenshots and UI work: `--open <n>`, `--compose`, `--to <text>` (a new message with that typed in To), `--palette`, `--unread`, `--split <tag>`, `--settings`, `--tooltips`, `--onboarding` (the assistant step) or `--onboarding tagging`, `--dark`, `--windowed` and `--close-window`. To check input handling, `--keys down,space,end,j,…` presses keys and `--swipe` swipes back; both print what is open and how far it is scrolled. `--snapshot <file.png>` saves the window (or its sheet) as an image, even when it's on another Space.
-
 To try the MCP server against a scratch store in a debug build: `NOOK_MCP_ENABLED=1 swift run nook-mcp --database /tmp/nook.sqlite` (or set `NOOK_DATABASE`). Release builds ignore `NOOK_MCP_ENABLED` and only honor the switch in Settings.
-
-Local and ad hoc builds can't use the hardened runtime, which requires a Team ID. Builds you share should be signed with a Developer ID.
 
 Regenerate the app icon with `swift scripts/make-icon.swift docs/icon.png`.
 
@@ -345,7 +299,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Roadmap
 
-1. Rich-text compose, signatures, send later, undo send
+1. Signatures, send later, undo send
 
 ## License
 
